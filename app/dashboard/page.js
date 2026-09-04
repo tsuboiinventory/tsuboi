@@ -45,9 +45,8 @@ export default function DashboardPage() {
         .from('stock_items')
         .select(`
           id, qty, reserved_qty, lot_no, expiry_date,
-          inventory_items ( id, sku, name, category_id ),
-          locations ( id, code, department_id, departments ( id, name ) ),
-          products ( reorder_point )
+          inventory_items ( id, sku, name, category_id, products ( reorder_point ) ),
+          locations ( id, code, department_id, departments ( id, name ) )
         `)
         .order('created_at', { ascending: false }),
       supabase.from('departments').select('id, name').order('name'),
@@ -74,7 +73,7 @@ export default function DashboardPage() {
   }
 
   function getStatus(row) {
-    const reorderPoint = row.products?.reorder_point ?? 0
+    const reorderPoint = row.inventory_items?.products?.reorder_point ?? 0
     const daysToExpiry = row.expiry_date
       ? Math.ceil((new Date(row.expiry_date) - new Date()) / (1000 * 60 * 60 * 24))
       : null
@@ -100,7 +99,7 @@ export default function DashboardPage() {
 
   const stats = useMemo(() => {
     const totalSku = new Set(stockItems.map((r) => r.inventory_items?.id)).size
-    const lowStock = stockItems.filter((r) => r.qty < (r.products?.reorder_point ?? 0)).length
+    const lowStock = stockItems.filter((r) => r.qty < (r.inventory_items?.products?.reorder_point ?? 0)).length
     const nearExpiry = stockItems.filter((r) => {
       if (!r.expiry_date) return false
       const days = Math.ceil((new Date(r.expiry_date) - new Date()) / (1000 * 60 * 60 * 24))
