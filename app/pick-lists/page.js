@@ -3,9 +3,9 @@
 export const dynamic = 'force-dynamic'
 
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { supabase } from '../../lib/supabaseClient'
-import Sidebar from '../../components/Sidebar'
+import { useParams, useRouter } from 'next/navigation'
+import { supabase } from '../../../lib/supabaseClient'
+import Sidebar from '../../../components/Sidebar'
 
 const STATUS_LABEL = {
   pending: { label: 'รอหยิบ', tone: 'warning' },
@@ -14,16 +14,31 @@ const STATUS_LABEL = {
   cancelled: { label: 'ยกเลิก', tone: 'danger' }
 }
 
-export default function PickListsPage() {
+export default function PickListDetailPage() {
+  const { id } = useParams()
   const router = useRouter()
 
   const [checkingAuth, setCheckingAuth] = useState(true)
-  const [pickLists, setPickLists] = useState([])
-  const [customers, setCustomers] = useState([])
+  const [pickList, setPickList] = useState(null)
+  const [items, setItems] = useState([])
+  const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showCreate, setShowCreate] = useState(false)
-  const [newCustomerId, setNewCustomerId] = useState('')
-  const [creating, setCreating] = useState(false)
+
+  const [newProductId, setNewProductId] = useState('')
+  const [newQty, setNewQty] = useState('')
+  const [addingItem, setAddingItem] = useState(false)
+  const [notice, setNotice] = useState(null)
+  const [confirming, setConfirming] = useState(false)
+
+  const [selectedStrategy, setSelectedStrategy] = useState('FEFO')
+  const [availableLots, setAvailableLots] = useState([])
+  const [selectedLotId, setSelectedLotId] = useState('')
+
+  const [showBulkPicker, setShowBulkPicker] = useState(false)
+  const [bulkSearch, setBulkSearch] = useState('')
+  const [bulkStrategy, setBulkStrategy] = useState('FEFO')
+  const [bulkQtyMap, setBulkQtyMap] = useState({}) // product_id -> qty
+  const [bulkAdding, setBulkAdding] = useState(false)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -35,109 +50,372 @@ export default function PickListsPage() {
   useEffect(() => {
     if (checkingAuth) return
     loadData()
-  }, [checkingAuth])
+  }, [checkingAuth, id])
 
   async function loadData() {
     setLoading(true)
-    const [listRes, custRes] = await Promise.all([
+
+    const [plRes, itemsRes, prodRes] = await Promise.all([
+      supabase.from('pick_lists').select('id, status, customers ( name )').eq('id', id).single(),
       supabase
-        .from('pick_lists')
-        .select('id, status, created_at, closed_at, customers ( name )')
-        .order('created_at', { ascending: false }),
-      supabase.from('customers').select('id, name').order('name')
+        .from('pick_list_items')
+        .select(`
+          id, requested_qty, picked_qty,
+          stock_items (
+            id, lot_no, expiry_date, qty,
+            inventory_items ( sku, name ),
+            locations ( code, departments ( name ) )
+          )
+        `)
+        .eq('pick_list_id', id)
+        .order('created_at'),
+      supabase
+        .from('inventory_items')
+        .select('id, sku, name')
+        .eq('item_type', 'product')
+        .order('name')
     ])
-    setPickLists(listRes.data ?? [])
-    setCustomers(custRes.data ?? [])
+
+    setPickList(plRes.data)
+    setItems(itemsRes.data ?? [])
+    setProducts(prodRes.data ?? [])
     setLoading(false)
   }
 
-  async function handleCreate(e) {
+  const isEditable = pickList?.status === 'pending' || pickList?.status === 'in_progress'
+
+  useEffect(() => {
+    setSelectedLotId('')
+    setAvailableLots([])
+
+    if (!newProductId || selectedStrategy !== 'MANUAL') return
+
+    async function loadLots() {
+      const { data: lots } = await supabase
+        .from('stock_items')
+        .select('id, lot_no, expiry_date, qty, reserved_qty, locations ( code )')
+        .eq('item_id', newProductId)
+      setAvailableLots((lots ?? []).filter((l) => l.qty - l.reserved_qty > 0))
+    }
+
+    loadLots()
+  }, [newProductId, selectedStrategy])
+
+  async function handleAddItem(e) {
     e.preventDefault()
-    if (!newCustomerId) return
-    setCreating(true)
+    if (!newProductId || !newQty || Number(newQty) <= 0) return
 
-    const { data: { user } } = await supabase.auth.getUser()
-
-    const { data, error } = await supabase
-      .from('pick_lists')
-      .insert({ customer_id: newCustomerId, created_by: user?.id })
-      .select('id')
-      .single()
-
-    setCreating(false)
-
-    if (error) {
-      alert('สร้างใบสั่งหยิบไม่สำเร็จ: ' + error.message)
+    if (selectedStrategy === 'MANUAL' && !selectedLotId) {
+      setNotice({ type: 'error', text: 'กรุณาเลือก Lot ที่ต้องการหยิบ' })
       return
     }
 
-    router.push(`/pick-lists/${data.id}`)
+    setAddingItem(true)
+    setNotice(null)
+
+    if (selectedStrategy === 'MANUAL') {
+      const { error } = await supabase.rpc('reserve_pick_list_item_manual', {
+        p_pick_list_id: id,
+        p_stock_item_id: selectedLotId,
+        p_qty: Number(newQty)
+      })
+
+      setAddingItem(false)
+
+      if (error) {
+        setNotice({ type: 'error', text: 'เพิ่มรายการไม่สำเร็จ: ' + error.message })
+        return
+      }
+      setNotice({ type: 'success', text: 'จองสต๊อกจาก Lot ที่เลือกสำเร็จ' })
+    } else {
+      const { data: remainder, error } = await supabase.rpc('create_pick_list_item', {
+        p_pick_list_id: id,
+        p_item_id: newProductId,
+        p_requested_qty: Number(newQty),
+        p_strategy: selectedStrategy
+      })
+
+      setAddingItem(false)
+
+      if (error) {
+        setNotice({ type: 'error', text: 'เพิ่มรายการไม่สำเร็จ: ' + error.message })
+        return
+      }
+
+      if (remainder > 0) {
+        setNotice({ type: 'warning', text: `สต๊อกไม่พอ จองได้ขาดอยู่ ${remainder} หน่วย (จองเท่าที่มีให้แล้ว)` })
+      } else {
+        setNotice({ type: 'success', text: `จองสต๊อกสำเร็จตามวิธี ${selectedStrategy}` })
+      }
+    }
+
+    setNewProductId('')
+    setNewQty('')
+    setSelectedLotId('')
+    loadData()
   }
 
-  if (checkingAuth) return null
+  async function handleBulkAdd() {
+    const selected = Object.entries(bulkQtyMap).filter(([, qty]) => Number(qty) > 0)
+    if (selected.length === 0) {
+      setNotice({ type: 'error', text: 'กรุณาใส่จำนวนอย่างน้อย 1 รายการ' })
+      return
+    }
+
+    setBulkAdding(true)
+    let shortageCount = 0
+    let errorCount = 0
+
+    for (const [productId, qty] of selected) {
+      const { data: remainder, error } = await supabase.rpc('create_pick_list_item', {
+        p_pick_list_id: id,
+        p_item_id: productId,
+        p_requested_qty: Number(qty),
+        p_strategy: bulkStrategy
+      })
+      if (error) errorCount++
+      else if (remainder > 0) shortageCount++
+    }
+
+    setBulkAdding(false)
+
+    if (errorCount > 0) {
+      setNotice({ type: 'error', text: `เพิ่มไม่สำเร็จ ${errorCount} รายการ` })
+    } else if (shortageCount > 0) {
+      setNotice({ type: 'warning', text: `เพิ่มสำเร็จ ${selected.length} รายการ แต่มี ${shortageCount} รายการที่สต๊อกไม่พอ` })
+    } else {
+      setNotice({ type: 'success', text: `เพิ่มสำเร็จทั้งหมด ${selected.length} รายการ` })
+    }
+
+    setBulkQtyMap({})
+    setShowBulkPicker(false)
+    loadData()
+  }
+
+  const filteredProducts = products.filter((p) => {
+    if (!bulkSearch) return true
+    const q = bulkSearch.toLowerCase()
+    return p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)
+  })
+
+
+    const qty = Math.max(0, Math.min(Number(value) || 0, requestedQty))
+    setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, picked_qty: qty } : it)))
+  }
+
+  async function handleSavePickedQty(itemId, qty) {
+    await supabase.from('pick_list_items').update({ picked_qty: qty }).eq('id', itemId)
+  }
+
+  async function handleConfirmShipment() {
+    if (!confirm('ยืนยันส่งของ? ระบบจะตัดสต๊อกจริงและปิดใบนี้')) return
+    setConfirming(true)
+
+    const { error } = await supabase.rpc('confirm_pick_list_shipment', { p_pick_list_id: id })
+
+    setConfirming(false)
+
+    if (error) {
+      alert('ยืนยันไม่สำเร็จ: ' + error.message)
+      return
+    }
+    loadData()
+  }
+
+  async function handleCancel() {
+    if (!confirm('ยกเลิกใบสั่งหยิบนี้? การจองสต๊อกทั้งหมดจะถูกปลดคืน')) return
+
+    const { error } = await supabase.rpc('cancel_pick_list', { p_pick_list_id: id })
+
+    if (error) {
+      alert('ยกเลิกไม่สำเร็จ: ' + error.message)
+      return
+    }
+    loadData()
+  }
+
+  if (checkingAuth || loading) return null
+  if (!pickList) return <p style={{ padding: 32 }}>ไม่พบใบสั่งหยิบนี้</p>
+
+  const status = STATUS_LABEL[pickList.status] ?? { label: pickList.status, tone: 'warning' }
 
   return (
     <div className="app-shell">
       <Sidebar />
       <main className="main">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <a href="/pick-lists" style={{ fontSize: 13, color: 'var(--ink-soft)' }}>← กลับไปหน้ารายการ</a>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
           <div>
-            <h2 style={{ margin: '0 0 4px' }}>ใบสั่งหยิบสินค้า</h2>
-            <p style={{ margin: 0, color: 'var(--ink-soft)', fontSize: 13 }}>
-              {loading ? 'กำลังโหลด...' : `ทั้งหมด ${pickLists.length} ใบ`}
-            </p>
+            <h2 style={{ margin: '0 0 4px' }}>ใบสั่งหยิบ — {pickList.customers?.name}</h2>
+            <span className={`badge ${status.tone}`}>{status.label}</span>
           </div>
-          <button className="primary" onClick={() => setShowCreate((v) => !v)}>
-            + สร้างใบสั่งหยิบใหม่
-          </button>
+          {isEditable && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={handleCancel}>ยกเลิกใบ</button>
+              <button className="primary" onClick={handleConfirmShipment} disabled={confirming}>
+                {confirming ? 'กำลังยืนยัน...' : 'ยืนยันส่ง'}
+              </button>
+            </div>
+          )}
         </div>
 
-        {showCreate && (
-          <form onSubmit={handleCreate} className="stat-card" style={{ marginTop: 20, maxWidth: 420 }}>
-            <label style={{ display: 'block', fontSize: 13, color: 'var(--ink-soft)', marginBottom: 8 }}>
-              เลือกลูกค้าสำหรับใบสั่งหยิบนี้
-            </label>
-            <select
-              value={newCustomerId}
-              onChange={(e) => setNewCustomerId(e.target.value)}
-              style={{ width: '100%', marginBottom: 12 }}
-              required
-            >
-              <option value="">— เลือกลูกค้า —</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+        {isEditable && (
+          <div style={{ marginTop: 20 }}>
+            <button onClick={() => setShowBulkPicker((v) => !v)}>
+              {showBulkPicker ? 'ปิดตัวเลือกหลายรายการ' : '+ เลือกสินค้าหลายรายการพร้อมกัน'}
+            </button>
+          </div>
+        )}
+
+        {isEditable && showBulkPicker && (
+          <div className="stat-card" style={{ marginTop: 12 }}>
+            <div className="filter-row" style={{ marginBottom: 0 }}>
+              <input
+                placeholder="ค้นหา SKU หรือชื่อสินค้า"
+                value={bulkSearch}
+                onChange={(e) => setBulkSearch(e.target.value)}
+                style={{ flex: 2 }}
+              />
+              <select value={bulkStrategy} onChange={(e) => setBulkStrategy(e.target.value)}>
+                <option value="FEFO">FEFO — หมดอายุก่อนออกก่อน</option>
+                <option value="FIFO">FIFO — รับเข้าก่อนออกก่อน</option>
+              </select>
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '8px 0' }}>
+              โหมดเลือกหลายรายการรองรับเฉพาะ FEFO/FIFO — ถ้าต้องการเลือก Lot เอง ให้เพิ่มทีละรายการด้านล่างแทน
+            </p>
+
+            <table className="data-table">
+              <thead><tr><th>SKU</th><th>ชื่อสินค้า</th><th style={{ width: 140 }}>จำนวนที่ต้องการ</th></tr></thead>
+              <tbody>
+                {filteredProducts.map((p) => (
+                  <tr key={p.id}>
+                    <td className="mono">{p.sku}</td>
+                    <td>{p.name}</td>
+                    <td>
+                      <input
+                        type="number"
+                        min="0"
+                        className="mono"
+                        style={{ width: 100 }}
+                        value={bulkQtyMap[p.id] ?? ''}
+                        onChange={(e) => setBulkQtyMap((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                      />
+                    </td>
+                  </tr>
+                ))}
+                {filteredProducts.length === 0 && (
+                  <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--ink-soft)', padding: 20 }}>ไม่พบสินค้า</td></tr>
+                )}
+              </tbody>
+            </table>
+
+            <button className="primary" onClick={handleBulkAdd} disabled={bulkAdding} style={{ marginTop: 12 }}>
+              {bulkAdding ? 'กำลังเพิ่ม...' : 'เพิ่มรายการที่เลือกทั้งหมด'}
+            </button>
+          </div>
+        )}
+
+        {isEditable && (
+          <>
+            <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginTop: 20, marginBottom: 6 }}>หรือเพิ่มทีละรายการ (รองรับเลือก Lot เอง)</p>
+            <form onSubmit={handleAddItem} className="filter-row" style={{ flexWrap: 'wrap' }}>
+            <select value={newProductId} onChange={(e) => setNewProductId(e.target.value)} required>
+              <option value="">— เลือกสินค้า —</option>
+              {products.map((p) => (
+                <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>
               ))}
             </select>
-            <button className="primary" type="submit" disabled={creating}>
-              {creating ? 'กำลังสร้าง...' : 'สร้างใบและเพิ่มรายการสินค้า'}
+
+            <select value={selectedStrategy} onChange={(e) => setSelectedStrategy(e.target.value)}>
+              <option value="FEFO">FEFO — หมดอายุก่อนออกก่อน</option>
+              <option value="FIFO">FIFO — รับเข้าก่อนออกก่อน</option>
+              <option value="MANUAL">เลือก Lot เอง</option>
+            </select>
+
+            {selectedStrategy === 'MANUAL' && (
+              <select
+                value={selectedLotId}
+                onChange={(e) => setSelectedLotId(e.target.value)}
+                required
+                style={{ minWidth: 260 }}
+              >
+                <option value="">— เลือก Lot —</option>
+                {availableLots.map((lot) => (
+                  <option key={lot.id} value={lot.id}>
+                    {lot.lot_no ?? 'ไม่มี Lot'} · {lot.locations?.code} · เหลือ {lot.qty - lot.reserved_qty}
+                    {lot.expiry_date ? ` · หมดอายุ ${lot.expiry_date}` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <input
+              type="number"
+              placeholder="จำนวนที่ต้องการ"
+              value={newQty}
+              onChange={(e) => setNewQty(e.target.value)}
+              min="1"
+              required
+              style={{ maxWidth: 160 }}
+            />
+            <button className="primary" type="submit" disabled={addingItem}>
+              {addingItem ? 'กำลังเพิ่ม...' : '+ เพิ่มรายการ'}
             </button>
           </form>
+          </>
+        )}
+
+        {notice && (
+          <p className={`badge ${notice.type === 'error' ? 'danger' : notice.type === 'warning' ? 'warning' : 'success'}`}
+            style={{ display: 'inline-block', marginTop: 10 }}>
+            {notice.text}
+          </p>
         )}
 
         <table className="data-table" style={{ marginTop: 20 }}>
           <thead>
             <tr>
-              <th>ลูกค้า</th>
-              <th>สถานะ</th>
-              <th>สร้างเมื่อ</th>
-              <th></th>
+              <th>SKU</th>
+              <th>ชื่อสินค้า</th>
+              <th>Lot</th>
+              <th>ตำแหน่ง</th>
+              <th>จองไว้</th>
+              <th>หยิบได้จริง</th>
             </tr>
           </thead>
           <tbody>
-            {pickLists.map((pl) => {
-              const status = STATUS_LABEL[pl.status] ?? { label: pl.status, tone: 'warning' }
-              return (
-                <tr key={pl.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/pick-lists/${pl.id}`)}>
-                  <td>{pl.customers?.name ?? '-'}</td>
-                  <td><span className={`badge ${status.tone}`}>{status.label}</span></td>
-                  <td className="mono">{new Date(pl.created_at).toLocaleString('th-TH')}</td>
-                  <td style={{ textAlign: 'right', color: 'var(--accent)' }}>ดูรายละเอียด →</td>
-                </tr>
-              )
-            })}
-            {!loading && pickLists.length === 0 && (
-              <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--ink-soft)', padding: 32 }}>
-                ยังไม่มีใบสั่งหยิบ
+            {items.map((it) => (
+              <tr key={it.id}>
+                <td className="mono">{it.stock_items?.inventory_items?.sku}</td>
+                <td>{it.stock_items?.inventory_items?.name}</td>
+                <td className="mono">{it.stock_items?.lot_no ?? '-'}</td>
+                <td>
+                  {it.stock_items?.locations?.departments?.name} / {it.stock_items?.locations?.code}
+                </td>
+                <td className="mono">{it.requested_qty}</td>
+                <td>
+                  {isEditable ? (
+                    <input
+                      type="number"
+                      className="mono"
+                      style={{ width: 90 }}
+                      value={it.picked_qty}
+                      min="0"
+                      max={it.requested_qty}
+                      onChange={(e) => handlePickedQtyChange(it.id, e.target.value, it.requested_qty)}
+                      onBlur={(e) => handleSavePickedQty(it.id, Number(e.target.value) || 0)}
+                    />
+                  ) : (
+                    <span className="mono">{it.picked_qty}</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {items.length === 0 && (
+              <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--ink-soft)', padding: 32 }}>
+                ยังไม่มีรายการสินค้าในใบนี้
               </td></tr>
             )}
           </tbody>
