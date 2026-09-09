@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabaseClient'
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'สต๊อกสินค้า' },
+  { href: '/reports', label: 'รายงาน' },
   { href: '/receive', label: 'รับสินค้าเข้า' },
   { href: '/pick-lists', label: 'ใบสั่งหยิบ' },
   { href: '/customers', label: 'ลูกค้า' },
