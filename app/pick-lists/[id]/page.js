@@ -34,6 +34,12 @@ export default function PickListDetailPage() {
   const [availableLots, setAvailableLots] = useState([])
   const [selectedLotId, setSelectedLotId] = useState('')
 
+  const [showBulkPicker, setShowBulkPicker] = useState(false)
+  const [bulkSearch, setBulkSearch] = useState('')
+  const [bulkStrategy, setBulkStrategy] = useState('FEFO')
+  const [bulkQtyMap, setBulkQtyMap] = useState({}) // product_id -> qty
+  const [bulkAdding, setBulkAdding] = useState(false)
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) { router.push('/login'); return }
@@ -149,7 +155,50 @@ export default function PickListDetailPage() {
     loadData()
   }
 
-  async function handlePickedQtyChange(itemId, value, requestedQty) {
+  async function handleBulkAdd() {
+    const selected = Object.entries(bulkQtyMap).filter(([, qty]) => Number(qty) > 0)
+    if (selected.length === 0) {
+      setNotice({ type: 'error', text: 'กรุณาใส่จำนวนอย่างน้อย 1 รายการ' })
+      return
+    }
+
+    setBulkAdding(true)
+    let shortageCount = 0
+    let errorCount = 0
+
+    for (const [productId, qty] of selected) {
+      const { data: remainder, error } = await supabase.rpc('create_pick_list_item', {
+        p_pick_list_id: id,
+        p_item_id: productId,
+        p_requested_qty: Number(qty),
+        p_strategy: bulkStrategy
+      })
+      if (error) errorCount++
+      else if (remainder > 0) shortageCount++
+    }
+
+    setBulkAdding(false)
+
+    if (errorCount > 0) {
+      setNotice({ type: 'error', text: `เพิ่มไม่สำเร็จ ${errorCount} รายการ` })
+    } else if (shortageCount > 0) {
+      setNotice({ type: 'warning', text: `เพิ่มสำเร็จ ${selected.length} รายการ แต่มี ${shortageCount} รายการที่สต๊อกไม่พอ` })
+    } else {
+      setNotice({ type: 'success', text: `เพิ่มสำเร็จทั้งหมด ${selected.length} รายการ` })
+    }
+
+    setBulkQtyMap({})
+    setShowBulkPicker(false)
+    loadData()
+  }
+
+  const filteredProducts = products.filter((p) => {
+    if (!bulkSearch) return true
+    const q = bulkSearch.toLowerCase()
+    return p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)
+  })
+
+
     const qty = Math.max(0, Math.min(Number(value) || 0, requestedQty))
     setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, picked_qty: qty } : it)))
   }
@@ -212,7 +261,66 @@ export default function PickListDetailPage() {
         </div>
 
         {isEditable && (
-          <form onSubmit={handleAddItem} className="filter-row" style={{ marginTop: 20, flexWrap: 'wrap' }}>
+          <div style={{ marginTop: 20 }}>
+            <button onClick={() => setShowBulkPicker((v) => !v)}>
+              {showBulkPicker ? 'ปิดตัวเลือกหลายรายการ' : '+ เลือกสินค้าหลายรายการพร้อมกัน'}
+            </button>
+          </div>
+        )}
+
+        {isEditable && showBulkPicker && (
+          <div className="stat-card" style={{ marginTop: 12 }}>
+            <div className="filter-row" style={{ marginBottom: 0 }}>
+              <input
+                placeholder="ค้นหา SKU หรือชื่อสินค้า"
+                value={bulkSearch}
+                onChange={(e) => setBulkSearch(e.target.value)}
+                style={{ flex: 2 }}
+              />
+              <select value={bulkStrategy} onChange={(e) => setBulkStrategy(e.target.value)}>
+                <option value="FEFO">FEFO — หมดอายุก่อนออกก่อน</option>
+                <option value="FIFO">FIFO — รับเข้าก่อนออกก่อน</option>
+              </select>
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '8px 0' }}>
+              โหมดเลือกหลายรายการรองรับเฉพาะ FEFO/FIFO — ถ้าต้องการเลือก Lot เอง ให้เพิ่มทีละรายการด้านล่างแทน
+            </p>
+
+            <table className="data-table">
+              <thead><tr><th>SKU</th><th>ชื่อสินค้า</th><th style={{ width: 140 }}>จำนวนที่ต้องการ</th></tr></thead>
+              <tbody>
+                {filteredProducts.map((p) => (
+                  <tr key={p.id}>
+                    <td className="mono">{p.sku}</td>
+                    <td>{p.name}</td>
+                    <td>
+                      <input
+                        type="number"
+                        min="0"
+                        className="mono"
+                        style={{ width: 100 }}
+                        value={bulkQtyMap[p.id] ?? ''}
+                        onChange={(e) => setBulkQtyMap((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                      />
+                    </td>
+                  </tr>
+                ))}
+                {filteredProducts.length === 0 && (
+                  <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--ink-soft)', padding: 20 }}>ไม่พบสินค้า</td></tr>
+                )}
+              </tbody>
+            </table>
+
+            <button className="primary" onClick={handleBulkAdd} disabled={bulkAdding} style={{ marginTop: 12 }}>
+              {bulkAdding ? 'กำลังเพิ่ม...' : 'เพิ่มรายการที่เลือกทั้งหมด'}
+            </button>
+          </div>
+        )}
+
+        {isEditable && (
+          <>
+            <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginTop: 20, marginBottom: 6 }}>หรือเพิ่มทีละรายการ (รองรับเลือก Lot เอง)</p>
+            <form onSubmit={handleAddItem} className="filter-row" style={{ flexWrap: 'wrap' }}>
             <select value={newProductId} onChange={(e) => setNewProductId(e.target.value)} required>
               <option value="">— เลือกสินค้า —</option>
               {products.map((p) => (
@@ -256,6 +364,7 @@ export default function PickListDetailPage() {
               {addingItem ? 'กำลังเพิ่ม...' : '+ เพิ่มรายการ'}
             </button>
           </form>
+          </>
         )}
 
         {notice && (
