@@ -27,22 +27,44 @@ export default function ReceivePage() {
   const [supplierId, setSupplierId] = useState('')
   const [refNo, setRefNo] = useState('')
 
+  const [costSheets, setCostSheets] = useState([])
+  const [costSheetId, setCostSheetId] = useState('')
+  const [costSheetItems, setCostSheetItems] = useState([])
+  const [costSheetItemId, setCostSheetItemId] = useState('')
+
+  const [notForSale, setNotForSale] = useState(false)
+  const [notForSaleReason, setNotForSaleReason] = useState('')
+
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
 
   useEffect(() => { loadOptions() }, [])
 
+  useEffect(() => {
+    setCostSheetItemId('')
+    setCostSheetItems([])
+    if (!costSheetId) return
+
+    supabase
+      .from('cost_sheet_items')
+      .select('id, product_id, product_name_text, sales_price, inventory_items ( sku, name )')
+      .eq('cost_sheet_id', costSheetId)
+      .then(({ data }) => setCostSheetItems(data ?? []))
+  }, [costSheetId])
+
   async function loadOptions() {
-    const [prodRes, catRes, locRes, supRes] = await Promise.all([
+    const [prodRes, catRes, locRes, supRes, costRes] = await Promise.all([
       supabase.from('inventory_items').select('id, sku, name').eq('item_type', 'product').order('name'),
       supabase.from('categories').select('id, name').order('name'),
       supabase.from('locations').select('id, code, departments ( name )').order('code'),
-      supabase.from('suppliers').select('id, name').order('name')
+      supabase.from('suppliers').select('id, name').order('name'),
+      supabase.from('cost_sheets').select('id, doc_no, revision_no').eq('is_current', true).order('doc_no')
     ])
     setProducts(prodRes.data ?? [])
     setCategories(catRes.data ?? [])
     setLocations(locRes.data ?? [])
     setSuppliers(supRes.data ?? [])
+    setCostSheets(costRes.data ?? [])
   }
 
   async function handleSubmit(e) {
@@ -93,7 +115,10 @@ export default function ReceivePage() {
         lot_no: lotNo || null,
         expiry_date: expiryDate || null,
         qty: 0,
-        received_at: new Date().toISOString()
+        received_at: new Date().toISOString(),
+        cost_sheet_item_id: costSheetItemId || null,
+        not_for_sale: notForSale,
+        not_for_sale_reason: notForSale ? notForSaleReason : null
       })
       .select('id').single()
 
@@ -123,7 +148,8 @@ export default function ReceivePage() {
     }
 
     setMessage({ ok: true, text: `รับสินค้าเข้าสำเร็จ ${qty} หน่วย` })
-    setLotNo(''); setExpiryDate(''); setQty(''); setRefNo('')
+    setLotNo(''); setExpiryDate(''); setQty(''); setRefNo(''); setCostSheetId(''); setCostSheetItemId('')
+    setNotForSale(false); setNotForSaleReason('')
     if (isNewProduct) {
       setIsNewProduct(false); setNewSku(''); setNewName(''); setNewCategoryId(''); setNewReorderPoint('')
       loadOptions()
@@ -165,7 +191,32 @@ export default function ReceivePage() {
 
           <hr style={{ margin: '16px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
 
-          <label style={{ fontSize: 13, color: 'var(--ink-soft)' }}>ตำแหน่งจัดเก็บ</label>
+          <label style={{ fontSize: 13, color: 'var(--ink-soft)' }}>อ้างอิงใบคำนวณต้นทุน (ถ้ามี — ใช้กำหนดราคาซื้อของ Lot นี้)</label>
+          <select value={costSheetId} onChange={(e) => setCostSheetId(e.target.value)} style={{ width: '100%', margin: '4px 0 8px' }}>
+            <option value="">— ไม่อ้างอิง —</option>
+            {costSheets.map((cs) => <option key={cs.id} value={cs.id}>{cs.doc_no} (Rev {cs.revision_no})</option>)}
+          </select>
+
+          {costSheetId && (
+            <select
+              value={costSheetItemId}
+              onChange={(e) => {
+                setCostSheetItemId(e.target.value)
+                const item = costSheetItems.find((i) => i.id === e.target.value)
+                if (item?.product_id) { setIsNewProduct(false); setProductId(item.product_id) }
+              }}
+              style={{ width: '100%', marginBottom: 10 }}
+            >
+              <option value="">— เลือกรายการในใบนี้ —</option>
+              {costSheetItems.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.inventory_items ? `${i.inventory_items.sku} — ${i.inventory_items.name}` : i.product_name_text}
+                </option>
+              ))}
+            </select>
+          )}
+
+          <hr style={{ margin: '16px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
           <select value={locationId} onChange={(e) => setLocationId(e.target.value)} required style={{ width: '100%', margin: '4px 0 10px' }}>
             <option value="">— เลือกตำแหน่ง —</option>
             {locations.map((l) => <option key={l.id} value={l.id}>{l.departments?.name} / {l.code}</option>)}
@@ -183,9 +234,22 @@ export default function ReceivePage() {
             {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
 
-          <input placeholder="เลขที่เอกสารอ้างอิง เช่น PO-2026-0001" value={refNo} onChange={(e) => setRefNo(e.target.value)} style={{ width: '100%', marginBottom: 14 }} />
+          <input placeholder="เลขที่เอกสารอ้างอิง เช่น PO-2026-0001" value={refNo} onChange={(e) => setRefNo(e.target.value)} style={{ width: '100%', marginBottom: 10 }} />
 
-          <button className="primary" type="submit" disabled={saving}>
+          <label style={{ fontSize: 13 }}>
+            <input type="checkbox" checked={notForSale} onChange={(e) => setNotForSale(e.target.checked)} style={{ marginRight: 6 }} />
+            ไม่ใช่สินค้าเพื่อขาย (เช่น ตัวอย่างสินค้า)
+          </label>
+          {notForSale && (
+            <input
+              placeholder="ระบุว่าเป็นอะไร เช่น ตัวอย่างสินค้า"
+              value={notForSaleReason}
+              onChange={(e) => setNotForSaleReason(e.target.value)}
+              style={{ width: '100%', margin: '8px 0' }}
+            />
+          )}
+
+          <button className="primary" type="submit" disabled={saving} style={{ marginTop: 8 }}>
             {saving ? 'กำลังบันทึก...' : 'บันทึกรับสินค้าเข้า'}
           </button>
 
