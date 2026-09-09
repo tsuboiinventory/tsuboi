@@ -10,6 +10,8 @@ const NAV_ITEMS = [
   { href: '/pick-lists', label: 'ใบสั่งหยิบ' },
   { href: '/customers', label: 'ลูกค้า' },
   { href: '/suppliers', label: 'Supplier' },
+  { href: '/cost-sheets', label: 'ใบคำนวณต้นทุน' },
+  { href: '/quotations', label: 'ใบเสนอราคา' },
   { href: '/import', label: 'นำเข้า Excel' },
   { href: '/automation', label: 'กฎ Automation' },
   { href: '/settings', label: 'ตั้งค่าข้อมูลพื้นฐาน' }
