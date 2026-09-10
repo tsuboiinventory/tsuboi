@@ -198,7 +198,7 @@ export default function PickListDetailPage() {
     return p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)
   })
 
-
+  async function handlePickedQtyChange(itemId, value, requestedQty) {
     const qty = Math.max(0, Math.min(Number(value) || 0, requestedQty))
     setItems((prev) => prev.map((it) => (it.id === itemId ? { ...it, picked_qty: qty } : it)))
   }
