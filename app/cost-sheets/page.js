@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabaseClient'
 import Sidebar from '../../components/Sidebar'
 
-const EMPTY_ITEM = { product_id: '', product_name_text: '', qty: '', unit: '', cost_of_good: '', sales_price: '', remark: '' }
+const EMPTY_ITEM = { product_id: '', product_name_text: '', product_search: '', qty: '', unit: '', cost_of_good: '', sales_price: '', remark: '' }
 const EMPTY_CHARGE = { label: '', amount: '' }
 
 export default function CostSheetsPage() {
@@ -21,12 +21,14 @@ export default function CostSheetsPage() {
   const [isRevision, setIsRevision] = useState(false)
   const [charges, setCharges] = useState([{ ...EMPTY_CHARGE }])
   const [items, setItems] = useState([{ ...EMPTY_ITEM }])
+  const [openProductSearchIdx, setOpenProductSearchIdx] = useState(null)
   const [customerId, setCustomerId] = useState('')
   const [attendTo, setAttendTo] = useState('')
   const [saleRemark, setSaleRemark] = useState('')
+  const [purchaseRemark, setPurchaseRemark] = useState('')
   const [allocationMethod, setAllocationMethod] = useState('proportional_qty')
   const [exchangeRate, setExchangeRate] = useState('1')
-  const [currencyLabel, setCurrencyLabel] = useState('USD')
+  const [currencyLabel, setCurrencyLabel] = useState('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
 
@@ -41,6 +43,19 @@ export default function CostSheetsPage() {
     setSheets(sheetRes.data ?? [])
     setProducts(prodRes.data ?? [])
     setCustomers(custRes.data ?? [])
+  }
+
+  function sheetTotals() {
+    let totalSales = 0, totalCost = 0
+    for (const it of items) {
+      const qty = Number(it.qty) || 0
+      const calc = liveCalc(it)
+      totalSales += qty * (Number(it.sales_price) || 0)
+      totalCost += qty * calc.unitCost
+    }
+    const totalGp = totalSales - totalCost
+    const totalGpPercent = totalSales ? (totalGp / totalSales) * 100 : 0
+    return { totalSales, totalCost, totalGp, totalGpPercent }
   }
 
   function totalCharges(chargeList) {
@@ -74,8 +89,8 @@ export default function CostSheetsPage() {
   function openNew() {
     setDocNo(''); setIsRevision(false)
     setCharges([{ ...EMPTY_CHARGE }]); setItems([{ ...EMPTY_ITEM }])
-    setCustomerId(''); setAttendTo(''); setSaleRemark(''); setAllocationMethod('proportional_qty')
-    setExchangeRate('1'); setCurrencyLabel('USD')
+    setCustomerId(''); setAttendTo(''); setSaleRemark(''); setPurchaseRemark(''); setAllocationMethod('proportional_qty')
+    setExchangeRate('1'); setCurrencyLabel('')
     setMessage(null)
     setShowForm(true)
   }
@@ -90,24 +105,29 @@ export default function CostSheetsPage() {
     setDocNo(sheet.doc_no); setIsRevision(true)
     setCharges(sheet.charges.length ? sheet.charges.map((c) => ({ label: c.label, amount: c.amount })) : [{ ...EMPTY_CHARGE }])
 
-    const { data: full } = await supabase.from('cost_sheets').select('customer_id, attend_to, sale_remark, allocation_method, exchange_rate, currency_label').eq('id', sheet.id).single()
+    const { data: full } = await supabase.from('cost_sheets').select('customer_id, attend_to, sale_remark, purchase_remark, allocation_method, exchange_rate, currency_label').eq('id', sheet.id).single()
     setCustomerId(full?.customer_id ?? '')
     setAttendTo(full?.attend_to ?? '')
     setSaleRemark(full?.sale_remark ?? '')
+    setPurchaseRemark(full?.purchase_remark ?? '')
     setAllocationMethod(full?.allocation_method ?? 'proportional_qty')
     setExchangeRate(String(full?.exchange_rate ?? 1))
-    setCurrencyLabel(full?.currency_label ?? 'USD')
+    setCurrencyLabel(full?.currency_label ?? '')
 
     const { data: existingItems } = await supabase
       .from('cost_sheet_items')
       .select('product_id, product_name_text, qty, unit, sales_price, remark, cost_of_good')
       .eq('cost_sheet_id', sheet.id)
-    setItems(existingItems && existingItems.length ? existingItems.map((i) => ({
-      product_id: i.product_id || '', product_name_text: i.product_name_text || '',
-      qty: i.qty, unit: i.unit || '', sales_price: i.sales_price,
-      cost_of_good: i.cost_of_good ?? '',
-      remark: i.remark || ''
-    })) : [{ ...EMPTY_ITEM }])
+    setItems(existingItems && existingItems.length ? existingItems.map((i) => {
+      const matched = products.find((p) => p.id === i.product_id)
+      return {
+        product_id: i.product_id || '', product_name_text: i.product_name_text || '',
+        product_search: matched ? `${matched.sku} — ${matched.name}` : (i.product_name_text || ''),
+        qty: i.qty, unit: i.unit || '', sales_price: i.sales_price,
+        cost_of_good: i.cost_of_good ?? '',
+        remark: i.remark || ''
+      }
+    }) : [{ ...EMPTY_ITEM }])
 
     setMessage(null)
     setShowForm(true)
@@ -142,6 +162,7 @@ export default function CostSheetsPage() {
       .insert({
         doc_no: docNo, revision_no: revisionNo, is_current: true, charges: validCharges, created_by: user?.id,
         customer_id: customerId || null, attend_to: attendTo || null, sale_remark: saleRemark || null,
+        purchase_remark: purchaseRemark || null,
         allocation_method: allocationMethod,
         exchange_rate: Number(exchangeRate) || 1, currency_label: currencyLabel || null
       })
@@ -207,7 +228,7 @@ export default function CostSheetsPage() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
               <label style={{ fontSize: 13, color: 'var(--ink-soft)' }}>เรทแลกเปลี่ยน (คูณกับ Cost of Good เท่านั้น — ถ้าเป็นบาทอยู่แล้วใส่ 1)</label>
               <input placeholder="เช่น 32 หรือ 1" type="number" value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)} style={{ maxWidth: 120 }} />
-              <input placeholder="สกุลเงิน (โน้ต)" value={currencyLabel} onChange={(e) => setCurrencyLabel(e.target.value)} style={{ maxWidth: 120 }} />
+              <input placeholder="สกุลเงิน" value={currencyLabel} onChange={(e) => setCurrencyLabel(e.target.value)} style={{ maxWidth: 120 }} />
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
@@ -236,10 +257,55 @@ export default function CostSheetsPage() {
             {items.map((it, idx) => (
               <div key={idx} className="stat-card" style={{ marginTop: 8, padding: 10 }}>
                 <div style={{ display: 'flex', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-                  <select value={it.product_id} onChange={(e) => updateItem(idx, 'product_id', e.target.value)} style={{ flex: 2 }}>
-                    <option value="">— สินค้าในระบบ (หรือพิมพ์ชื่อใหม่ด้านล่าง) —</option>
-                    {products.map((p) => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
-                  </select>
+                  <div style={{ position: 'relative', flex: 2 }}>
+                    <input
+                      placeholder="พิมพ์ SKU หรือชื่อสินค้าเพื่อค้นหา"
+                      value={it.product_search}
+                      onChange={(e) => {
+                        updateItem(idx, 'product_search', e.target.value)
+                        updateItem(idx, 'product_id', '')
+                        setOpenProductSearchIdx(idx)
+                      }}
+                      onFocus={() => setOpenProductSearchIdx(idx)}
+                      onBlur={() => setTimeout(() => setOpenProductSearchIdx((cur) => (cur === idx ? null : cur)), 150)}
+                      style={{ width: '100%' }}
+                    />
+                    {openProductSearchIdx === idx && it.product_search && !it.product_id && (
+                      <div style={{
+                        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
+                        background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--radius)',
+                        maxHeight: 200, overflowY: 'auto', boxShadow: '0 4px 10px rgba(0,0,0,0.08)'
+                      }}>
+                        {products
+                          .filter((p) => {
+                            const q = it.product_search.toLowerCase()
+                            return p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)
+                          })
+                          .slice(0, 20)
+                          .map((p) => (
+                            <div
+                              key={p.id}
+                              onMouseDown={() => {
+                                updateItem(idx, 'product_id', p.id)
+                                updateItem(idx, 'product_search', `${p.sku} — ${p.name}`)
+                                setOpenProductSearchIdx(null)
+                              }}
+                              style={{ padding: '8px 10px', cursor: 'pointer', fontSize: 13 }}
+                              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--paper)'}
+                              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                            >
+                              <span className="mono">{p.sku}</span> — {p.name}
+                            </div>
+                          ))}
+                        {products.filter((p) => {
+                          const q = it.product_search.toLowerCase()
+                          return p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)
+                        }).length === 0 && (
+                          <div style={{ padding: '8px 10px', fontSize: 13, color: 'var(--ink-soft)' }}>ไม่พบสินค้า — จะใช้เป็นชื่อสินค้าใหม่แทน</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   {!it.product_id && (
                     <input placeholder="ชื่อสินค้า (ถ้ายังไม่มีในระบบ)" value={it.product_name_text} onChange={(e) => updateItem(idx, 'product_name_text', e.target.value)} style={{ flex: 2 }} />
                   )}
@@ -285,6 +351,23 @@ export default function CostSheetsPage() {
               <button type="button" onClick={() => setItems((prev) => [...prev, { ...EMPTY_ITEM }])} style={{ marginTop: 8 }}>+ เพิ่มรายการสินค้า</button>
             )}
 
+            {(() => {
+              const t = sheetTotals()
+              return (
+                <div className="stat-card" style={{ marginTop: 16, background: 'var(--paper)' }}>
+                  <strong style={{ fontSize: 14 }}>สรุปทั้งใบ</strong>
+                  <p style={{ fontSize: 13, margin: '8px 0 0' }}>
+                    ยอดขายรวม: <b className="mono">{t.totalSales.toLocaleString(undefined, { maximumFractionDigits: 2 })}</b>
+                    {' · '}ต้นทุนรวม: <b className="mono">{t.totalCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</b>
+                    {' · '}GP รวม: <b className="mono" style={{ color: t.totalGp >= 0 ? 'var(--success-ink)' : 'var(--danger-ink)' }}>
+                      {t.totalGp.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    </b>
+                    {' ('}{t.totalGpPercent.toFixed(1)}%{')'}
+                  </p>
+                </div>
+              )
+            })()}
+
             <hr style={{ margin: '16px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
             <label style={{ fontSize: 13, color: 'var(--ink-soft)' }}>หมายเหตุ/เงื่อนไขการขาย (แสดงในใบเสนอราคา)</label>
             <textarea
@@ -292,6 +375,15 @@ export default function CostSheetsPage() {
               onChange={(e) => setSaleRemark(e.target.value)}
               rows={5}
               placeholder="เช่น Price: DDP/THB&#10;Delivery Allowance: +10%, -20%&#10;Payment Term: ..."
+              style={{ width: '100%', marginTop: 4 }}
+            />
+
+            <label style={{ fontSize: 13, color: 'var(--ink-soft)', marginTop: 12, display: 'block' }}>เงื่อนไขการซื้อ (ใช้ภายใน — ไม่แสดงบนใบเสนอราคา)</label>
+            <textarea
+              value={purchaseRemark}
+              onChange={(e) => setPurchaseRemark(e.target.value)}
+              rows={4}
+              placeholder="เช่น เงื่อนไขการชำระเงินกับ Supplier, วันส่งมอบ ฯลฯ"
               style={{ width: '100%', marginTop: 4 }}
             />
 
@@ -345,6 +437,23 @@ export default function CostSheetsPage() {
                           })}
                         </tbody>
                       </table>
+                      {(() => {
+                        const rows = itemCalc[s.doc_no] ?? []
+                        const totalSales = rows.reduce((sum, r) => sum + r.qty * r.sales_price, 0)
+                        const totalCost = rows.reduce((sum, r) => sum + r.qty * r.allocated_unit_cost, 0)
+                        const totalGp = totalSales - totalCost
+                        const totalGpPercent = totalSales ? (totalGp / totalSales) * 100 : 0
+                        return rows.length > 0 ? (
+                          <p style={{ fontSize: 13, margin: '8px 12px' }}>
+                            <b>สรุปทั้งใบ</b> — ยอดขายรวม: <b className="mono">{totalSales.toLocaleString(undefined, { maximumFractionDigits: 2 })}</b>
+                            {' · '}ต้นทุนรวม: <b className="mono">{totalCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</b>
+                            {' · '}GP รวม: <b className="mono" style={{ color: totalGp >= 0 ? 'var(--success-ink)' : 'var(--danger-ink)' }}>
+                              {totalGp.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            </b>
+                            {' ('}{totalGpPercent.toFixed(1)}%{')'}
+                          </p>
+                        ) : null
+                      })()}
                     </td>
                   </tr>
                 )}
