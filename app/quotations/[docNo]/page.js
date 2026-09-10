@@ -11,6 +11,7 @@ export default function QuotationDocPage() {
   const [sheet, setSheet] = useState(null)
   const [items, setItems] = useState([])
   const [company, setCompany] = useState(null)
+  const [template, setTemplate] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => { loadData() }, [docNo])
@@ -19,18 +20,20 @@ export default function QuotationDocPage() {
     setLoading(true)
     const decoded = decodeURIComponent(docNo)
 
-    const [sheetRes, companyRes] = await Promise.all([
+    const [sheetRes, companyRes, templateRes] = await Promise.all([
       supabase
         .from('cost_sheets')
         .select('id, doc_no, created_at, attend_to, sale_remark, customers ( name, address, tax_id )')
         .eq('doc_no', decoded)
         .eq('is_current', true)
         .single(),
-      supabase.from('company_profile').select('*').limit(1).single()
+      supabase.from('company_profile').select('*').limit(1).single(),
+      supabase.from('quotation_template').select('*').limit(1).single()
     ])
 
     setSheet(sheetRes.data)
     setCompany(companyRes.data)
+    setTemplate(templateRes.data)
 
     if (sheetRes.data) {
       const { data: itemRows } = await supabase
@@ -47,6 +50,9 @@ export default function QuotationDocPage() {
   if (!sheet) return <p style={{ padding: 32 }}>ไม่พบใบเสนอราคาเลขที่ {decodeURIComponent(docNo)}</p>
 
   const customer = sheet.customers
+  const accent = template?.accent_color || '#111111'
+  const logoPos = template?.logo_position || 'left'
+  const headerJustify = logoPos === 'right' ? 'row-reverse' : logoPos === 'center' ? 'column' : 'row'
 
   return (
     <div style={{ background: '#f2f2f2', minHeight: '100vh', padding: 20 }}>
@@ -65,26 +71,26 @@ export default function QuotationDocPage() {
 
       <div className="doc-page" style={{ maxWidth: 800, margin: '0 auto', background: 'white', padding: 40, boxShadow: '0 0 12px rgba(0,0,0,0.1)' }}>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', flexDirection: headerJustify, justifyContent: 'space-between', alignItems: logoPos === 'center' ? 'center' : 'flex-start', gap: 12 }}>
           <div>
             {company?.logo_url && <img src={company.logo_url} alt="logo" style={{ height: 50, marginBottom: 8 }} />}
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <h2 style={{ margin: 0 }}>QUOTATION</h2>
+          <div style={{ textAlign: logoPos === 'center' ? 'center' : (logoPos === 'right' ? 'left' : 'right') }}>
+            <h2 style={{ margin: 0, color: accent }}>QUOTATION</h2>
             <p style={{ margin: '4px 0 0', fontWeight: 600 }}>{company?.name}</p>
             <p style={{ margin: '2px 0', fontSize: 13, color: '#555' }}>{company?.address}</p>
             <p style={{ margin: '2px 0', fontSize: 13, color: '#555' }}>Tel. {company?.tel}</p>
           </div>
         </div>
 
-        <hr style={{ margin: '20px 0' }} />
+        <hr style={{ margin: '20px 0', borderColor: accent, opacity: 0.3 }} />
 
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
           <div>
-            <p><b>Attend to</b> &nbsp; {sheet.attend_to}</p>
+            {template?.show_attend_to && <p><b>Attend to</b> &nbsp; {sheet.attend_to}</p>}
             <p><b>Customer Name</b> &nbsp; {customer?.name}</p>
             <p><b>Company Address</b><br />{customer?.address}</p>
-            <p><b>TAX ID:</b> &nbsp; {customer?.tax_id}</p>
+            {template?.show_tax_id && <p><b>TAX ID:</b> &nbsp; {customer?.tax_id}</p>}
           </div>
           <div style={{ textAlign: 'right' }}>
             <p><b>Quotation No :</b> {sheet.doc_no}</p>
@@ -94,12 +100,12 @@ export default function QuotationDocPage() {
 
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 20, fontSize: 14 }}>
           <thead>
-            <tr style={{ background: '#f5f5f5' }}>
+            <tr style={{ background: accent, color: 'white' }}>
               <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'left' }}>Product</th>
               <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>Price</th>
               <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>Quantity</th>
               <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>Amount</th>
-              <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'left' }}>Remark</th>
+              {template?.show_remark_column && <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'left' }}>Remark</th>}
             </tr>
           </thead>
           <tbody>
@@ -109,7 +115,7 @@ export default function QuotationDocPage() {
                 <td style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>{Number(it.sales_price).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                 <td style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>{it.qty}</td>
                 <td style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>{(it.qty * it.sales_price).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                <td style={{ border: '1px solid #ddd', padding: 8 }}>{it.remark}</td>
+                {template?.show_remark_column && <td style={{ border: '1px solid #ddd', padding: 8 }}>{it.remark}</td>}
               </tr>
             ))}
           </tbody>
