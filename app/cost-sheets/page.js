@@ -7,7 +7,7 @@ import { supabase } from '../../lib/supabaseClient'
 import Sidebar from '../../components/Sidebar'
 
 const EMPTY_CHARGE = { label: '', amount: '' }
-const EMPTY_ITEM = { product_id: '', product_name_text: '', qty: '', weight: '', sales_price: '', allocation_method: 'proportional_qty', remark: '' }
+const EMPTY_ITEM = { product_id: '', product_name_text: '', qty: '', unit: '', sales_price: '', remark: '' }
 
 export default function CostSheetsPage() {
   const [sheets, setSheets] = useState([])
@@ -24,6 +24,7 @@ export default function CostSheetsPage() {
   const [customerId, setCustomerId] = useState('')
   const [attendTo, setAttendTo] = useState('')
   const [saleRemark, setSaleRemark] = useState('')
+  const [allocationMethod, setAllocationMethod] = useState('proportional_qty')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
 
@@ -47,7 +48,7 @@ export default function CostSheetsPage() {
   function openNew() {
     setDocNo(''); setIsRevision(false)
     setCharges([{ ...EMPTY_CHARGE }]); setItems([{ ...EMPTY_ITEM }])
-    setCustomerId(''); setAttendTo(''); setSaleRemark('')
+    setCustomerId(''); setAttendTo(''); setSaleRemark(''); setAllocationMethod('proportional_qty')
     setMessage(null)
     setShowForm(true)
   }
@@ -62,18 +63,19 @@ export default function CostSheetsPage() {
     setDocNo(sheet.doc_no); setIsRevision(true)
     setCharges(sheet.charges.length ? sheet.charges.map((c) => ({ label: c.label, amount: c.amount })) : [{ ...EMPTY_CHARGE }])
 
-    const { data: full } = await supabase.from('cost_sheets').select('customer_id, attend_to, sale_remark').eq('id', sheet.id).single()
+    const { data: full } = await supabase.from('cost_sheets').select('customer_id, attend_to, sale_remark, allocation_method').eq('id', sheet.id).single()
     setCustomerId(full?.customer_id ?? '')
     setAttendTo(full?.attend_to ?? '')
     setSaleRemark(full?.sale_remark ?? '')
+    setAllocationMethod(full?.allocation_method ?? 'proportional_qty')
 
     const { data: existingItems } = await supabase
       .from('cost_sheet_items')
-      .select('product_id, product_name_text, qty, weight, sales_price, allocation_method, remark')
+      .select('product_id, product_name_text, qty, unit, sales_price, remark')
       .eq('cost_sheet_id', sheet.id)
     setItems(existingItems && existingItems.length ? existingItems.map((i) => ({
       product_id: i.product_id || '', product_name_text: i.product_name_text || '',
-      qty: i.qty, weight: i.weight ?? '', sales_price: i.sales_price, allocation_method: i.allocation_method,
+      qty: i.qty, unit: i.unit || '', sales_price: i.sales_price,
       remark: i.remark || ''
     })) : [{ ...EMPTY_ITEM }])
 
@@ -109,7 +111,8 @@ export default function CostSheetsPage() {
       .from('cost_sheets')
       .insert({
         doc_no: docNo, revision_no: revisionNo, is_current: true, charges: validCharges, created_by: user?.id,
-        customer_id: customerId || null, attend_to: attendTo || null, sale_remark: saleRemark || null
+        customer_id: customerId || null, attend_to: attendTo || null, sale_remark: saleRemark || null,
+        allocation_method: allocationMethod
       })
       .select('id').single()
 
@@ -122,9 +125,8 @@ export default function CostSheetsPage() {
         product_id: it.product_id || null,
         product_name_text: it.product_id ? null : (it.product_name_text || null),
         qty: Number(it.qty),
-        weight: it.weight ? Number(it.weight) : null,
+        unit: it.unit || null,
         sales_price: Number(it.sales_price) || 0,
-        allocation_method: it.allocation_method,
         remark: it.remark || null
       }))
 
@@ -164,6 +166,10 @@ export default function CostSheetsPage() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
               <input placeholder="เลขที่ใบ" value={docNo} onChange={(e) => setDocNo(e.target.value)} disabled={isRevision} required style={{ maxWidth: 240 }} />
               {isRevision && <span className="badge warning">กำลังสร้าง Revision ใหม่</span>}
+              <select value={allocationMethod} onChange={(e) => setAllocationMethod(e.target.value)}>
+                <option value="proportional_qty">เฉลี่ยตามสัดส่วนจำนวน (ทั้งใบ)</option>
+                <option value="lump_sum">Lump sum — รวมทั้งหมดไม่แบ่งสัดส่วน (ทั้งใบ)</option>
+              </select>
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
@@ -203,12 +209,20 @@ export default function CostSheetsPage() {
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <input placeholder="จำนวน" type="number" value={it.qty} onChange={(e) => updateItem(idx, 'qty', e.target.value)} style={{ flex: 1 }} required />
-                  <input placeholder="น้ำหนัก (ถ้ามี)" type="number" value={it.weight} onChange={(e) => updateItem(idx, 'weight', e.target.value)} style={{ flex: 1 }} />
-                  <input placeholder="ราคาขาย/หน่วย" type="number" value={it.sales_price} onChange={(e) => updateItem(idx, 'sales_price', e.target.value)} style={{ flex: 1 }} />
-                  <select value={it.allocation_method} onChange={(e) => updateItem(idx, 'allocation_method', e.target.value)} style={{ flex: 1 }}>
-                    <option value="proportional_qty">เฉลี่ยตามสัดส่วน</option>
-                    <option value="lump_sum">Lump sum (รับเต็ม)</option>
+                  <select value={it.unit} onChange={(e) => updateItem(idx, 'unit', e.target.value)} style={{ flex: 1 }}>
+                    <option value="">— หน่วยนับ —</option>
+                    <option value="ชิ้น">ชิ้น</option>
+                    <option value="กก.">กก.</option>
+                    <option value="ตัน">ตัน</option>
+                    <option value="ม้วน">ม้วน</option>
+                    <option value="แผ่น">แผ่น</option>
+                    <option value="กล่อง">กล่อง</option>
+                    <option value="ลัง">ลัง</option>
+                    <option value="เมตร">เมตร</option>
+                    <option value="เส้น">เส้น</option>
+                    <option value="อัน">อัน</option>
                   </select>
+                  <input placeholder="ราคาขาย/หน่วย" type="number" value={it.sales_price} onChange={(e) => updateItem(idx, 'sales_price', e.target.value)} style={{ flex: 1 }} />
                 </div>
                 <input placeholder="Remark (โชว์ในใบเสนอราคา)" value={it.remark} onChange={(e) => updateItem(idx, 'remark', e.target.value)} style={{ width: '100%', marginTop: 6 }} />
               </div>
