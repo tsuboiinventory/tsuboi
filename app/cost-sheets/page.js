@@ -7,11 +7,12 @@ import { supabase } from '../../lib/supabaseClient'
 import Sidebar from '../../components/Sidebar'
 
 const EMPTY_CHARGE = { label: '', amount: '' }
-const EMPTY_ITEM = { product_id: '', product_name_text: '', qty: '', weight: '', sales_price: '', allocation_method: 'proportional_qty' }
+const EMPTY_ITEM = { product_id: '', product_name_text: '', qty: '', weight: '', sales_price: '', allocation_method: 'proportional_qty', remark: '' }
 
 export default function CostSheetsPage() {
   const [sheets, setSheets] = useState([])
   const [products, setProducts] = useState([])
+  const [customers, setCustomers] = useState([])
   const [expandedDocNo, setExpandedDocNo] = useState(null)
   const [itemCalc, setItemCalc] = useState({})
 
@@ -20,18 +21,23 @@ export default function CostSheetsPage() {
   const [isRevision, setIsRevision] = useState(false)
   const [charges, setCharges] = useState([{ ...EMPTY_CHARGE }])
   const [items, setItems] = useState([{ ...EMPTY_ITEM }])
+  const [customerId, setCustomerId] = useState('')
+  const [attendTo, setAttendTo] = useState('')
+  const [saleRemark, setSaleRemark] = useState('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
 
   useEffect(() => { loadData() }, [])
 
   async function loadData() {
-    const [sheetRes, prodRes] = await Promise.all([
-      supabase.from('cost_sheets').select('id, doc_no, revision_no, charges, created_at').eq('is_current', true).order('created_at', { ascending: false }),
-      supabase.from('inventory_items').select('id, sku, name').eq('item_type', 'product').order('name')
+    const [sheetRes, prodRes, custRes] = await Promise.all([
+      supabase.from('cost_sheets').select('id, doc_no, revision_no, charges, created_at, customer_id, customers ( name )').eq('is_current', true).order('created_at', { ascending: false }),
+      supabase.from('inventory_items').select('id, sku, name').eq('item_type', 'product').order('name'),
+      supabase.from('customers').select('id, name, contact_name').order('name')
     ])
     setSheets(sheetRes.data ?? [])
     setProducts(prodRes.data ?? [])
+    setCustomers(custRes.data ?? [])
   }
 
   function totalCharges(chargeList) {
@@ -41,21 +47,34 @@ export default function CostSheetsPage() {
   function openNew() {
     setDocNo(''); setIsRevision(false)
     setCharges([{ ...EMPTY_CHARGE }]); setItems([{ ...EMPTY_ITEM }])
+    setCustomerId(''); setAttendTo(''); setSaleRemark('')
     setMessage(null)
     setShowForm(true)
+  }
+
+  function handleCustomerChange(id) {
+    setCustomerId(id)
+    const c = customers.find((x) => x.id === id)
+    if (c?.contact_name) setAttendTo(c.contact_name)
   }
 
   async function openRevise(sheet) {
     setDocNo(sheet.doc_no); setIsRevision(true)
     setCharges(sheet.charges.length ? sheet.charges.map((c) => ({ label: c.label, amount: c.amount })) : [{ ...EMPTY_CHARGE }])
 
+    const { data: full } = await supabase.from('cost_sheets').select('customer_id, attend_to, sale_remark').eq('id', sheet.id).single()
+    setCustomerId(full?.customer_id ?? '')
+    setAttendTo(full?.attend_to ?? '')
+    setSaleRemark(full?.sale_remark ?? '')
+
     const { data: existingItems } = await supabase
       .from('cost_sheet_items')
-      .select('product_id, product_name_text, qty, weight, sales_price, allocation_method')
+      .select('product_id, product_name_text, qty, weight, sales_price, allocation_method, remark')
       .eq('cost_sheet_id', sheet.id)
     setItems(existingItems && existingItems.length ? existingItems.map((i) => ({
       product_id: i.product_id || '', product_name_text: i.product_name_text || '',
-      qty: i.qty, weight: i.weight ?? '', sales_price: i.sales_price, allocation_method: i.allocation_method
+      qty: i.qty, weight: i.weight ?? '', sales_price: i.sales_price, allocation_method: i.allocation_method,
+      remark: i.remark || ''
     })) : [{ ...EMPTY_ITEM }])
 
     setMessage(null)
@@ -88,7 +107,10 @@ export default function CostSheetsPage() {
 
     const { data: sheet, error: sheetError } = await supabase
       .from('cost_sheets')
-      .insert({ doc_no: docNo, revision_no: revisionNo, is_current: true, charges: validCharges, created_by: user?.id })
+      .insert({
+        doc_no: docNo, revision_no: revisionNo, is_current: true, charges: validCharges, created_by: user?.id,
+        customer_id: customerId || null, attend_to: attendTo || null, sale_remark: saleRemark || null
+      })
       .select('id').single()
 
     if (sheetError) { setMessage({ ok: false, text: 'บันทึกไม่สำเร็จ: ' + sheetError.message }); setSaving(false); return }
@@ -102,7 +124,8 @@ export default function CostSheetsPage() {
         qty: Number(it.qty),
         weight: it.weight ? Number(it.weight) : null,
         sales_price: Number(it.sales_price) || 0,
-        allocation_method: it.allocation_method
+        allocation_method: it.allocation_method,
+        remark: it.remark || null
       }))
 
     const { error: itemsError } = await supabase.from('cost_sheet_items').insert(itemRows)
@@ -143,6 +166,14 @@ export default function CostSheetsPage() {
               {isRevision && <span className="badge warning">กำลังสร้าง Revision ใหม่</span>}
             </div>
 
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <select value={customerId} onChange={(e) => handleCustomerChange(e.target.value)} style={{ flex: 1 }}>
+                <option value="">— ลูกค้า (ถ้าจะออกใบเสนอราคา) —</option>
+                {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <input placeholder="Attend to (ผู้ติดต่อ)" value={attendTo} onChange={(e) => setAttendTo(e.target.value)} style={{ flex: 1 }} />
+            </div>
+
             <strong style={{ fontSize: 14 }}>ค่าใช้จ่ายรวมทั้งใบ</strong>
             <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 8px' }}>เพิ่ม/ลดรายการได้อิสระ (เช่น Purchasing Price, THC Charge, Import Duty ฯลฯ)</p>
             {charges.map((c, idx) => (
@@ -179,11 +210,22 @@ export default function CostSheetsPage() {
                     <option value="lump_sum">Lump sum (รับเต็ม)</option>
                   </select>
                 </div>
+                <input placeholder="Remark (โชว์ในใบเสนอราคา)" value={it.remark} onChange={(e) => updateItem(idx, 'remark', e.target.value)} style={{ width: '100%', marginTop: 6 }} />
               </div>
             ))}
             {items.length < 10 && (
               <button type="button" onClick={() => setItems((prev) => [...prev, { ...EMPTY_ITEM }])} style={{ marginTop: 8 }}>+ เพิ่มรายการสินค้า</button>
             )}
+
+            <hr style={{ margin: '16px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
+            <label style={{ fontSize: 13, color: 'var(--ink-soft)' }}>หมายเหตุ/เงื่อนไขการขาย (แสดงในใบเสนอราคา)</label>
+            <textarea
+              value={saleRemark}
+              onChange={(e) => setSaleRemark(e.target.value)}
+              rows={5}
+              placeholder="เช่น Price: DDP/THB&#10;Delivery Allowance: +10%, -20%&#10;Payment Term: ..."
+              style={{ width: '100%', marginTop: 4 }}
+            />
 
             {message && (
               <p className={`badge ${message.ok ? 'success' : 'danger'}`} style={{ display: 'block', marginTop: 12, width: 'fit-content' }}>{message.text}</p>
@@ -207,6 +249,11 @@ export default function CostSheetsPage() {
                   <td className="mono">{totalCharges(s.charges).toLocaleString()}</td>
                   <td className="mono">{new Date(s.created_at).toLocaleDateString('th-TH')}</td>
                   <td style={{ textAlign: 'right' }}>
+                    {s.customer_id && (
+                      <a href={`/quotations/${encodeURIComponent(s.doc_no)}`} onClick={(e) => e.stopPropagation()} style={{ marginRight: 12 }}>
+                        ดูใบเสนอราคา
+                      </a>
+                    )}
                     <button onClick={(e) => { e.stopPropagation(); openRevise(s) }}>แก้ไข (Revision ใหม่)</button>
                   </td>
                 </tr>
