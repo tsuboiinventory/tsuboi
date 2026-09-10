@@ -6,8 +6,8 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabaseClient'
 import Sidebar from '../../components/Sidebar'
 
-const EMPTY_CHARGE = { label: '', amount: '' }
-const EMPTY_ITEM = { product_id: '', product_name_text: '', qty: '', unit: '', sales_price: '', remark: '' }
+const EMPTY_ITEM = { product_id: '', product_name_text: '', qty: '', unit: '', cost_of_good: '', cost_of_good_is_foreign: false, sales_price: '', remark: '' }
+const EMPTY_CHARGE = { label: '', amount: '', is_foreign: false }
 
 export default function CostSheetsPage() {
   const [sheets, setSheets] = useState([])
@@ -25,6 +25,8 @@ export default function CostSheetsPage() {
   const [attendTo, setAttendTo] = useState('')
   const [saleRemark, setSaleRemark] = useState('')
   const [allocationMethod, setAllocationMethod] = useState('proportional_qty')
+  const [exchangeRate, setExchangeRate] = useState('1')
+  const [currencyLabel, setCurrencyLabel] = useState('USD')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
 
@@ -42,13 +44,39 @@ export default function CostSheetsPage() {
   }
 
   function totalCharges(chargeList) {
-    return chargeList.reduce((sum, c) => sum + (Number(c.amount) || 0), 0)
+    const rate = Number(exchangeRate) || 1
+    return chargeList.reduce((sum, c) => sum + (Number(c.amount) || 0) * (c.is_foreign ? rate : 1), 0)
+  }
+
+  // คำนวณต้นทุน/GP แบบสด ตอนกำลังกรอกฟอร์ม (ก่อนบันทึกจริง)
+  function liveCalc(item) {
+    const rate = Number(exchangeRate) || 1
+    const qty = Number(item.qty) || 0
+    const totalQty = items.reduce((sum, it) => sum + (Number(it.qty) || 0), 0)
+    const totalOverhead = totalCharges(charges)
+
+    const cogThb = (Number(item.cost_of_good) || 0) * (item.cost_of_good_is_foreign ? rate : 1)
+
+    let overheadShare = 0
+    if (qty > 0) {
+      overheadShare = allocationMethod === 'lump_sum'
+        ? totalOverhead / qty
+        : (totalQty > 0 ? (totalOverhead * (qty / totalQty)) / qty : 0)
+    }
+
+    const unitCost = cogThb + overheadShare
+    const salesPrice = Number(item.sales_price) || 0
+    const gp = salesPrice - unitCost
+    const gpPercent = salesPrice ? (gp / salesPrice) * 100 : 0
+
+    return { unitCost, gp, gpPercent }
   }
 
   function openNew() {
     setDocNo(''); setIsRevision(false)
     setCharges([{ ...EMPTY_CHARGE }]); setItems([{ ...EMPTY_ITEM }])
     setCustomerId(''); setAttendTo(''); setSaleRemark(''); setAllocationMethod('proportional_qty')
+    setExchangeRate('1'); setCurrencyLabel('USD')
     setMessage(null)
     setShowForm(true)
   }
@@ -61,21 +89,24 @@ export default function CostSheetsPage() {
 
   async function openRevise(sheet) {
     setDocNo(sheet.doc_no); setIsRevision(true)
-    setCharges(sheet.charges.length ? sheet.charges.map((c) => ({ label: c.label, amount: c.amount })) : [{ ...EMPTY_CHARGE }])
+    setCharges(sheet.charges.length ? sheet.charges.map((c) => ({ label: c.label, amount: c.amount, is_foreign: c.is_foreign ?? false })) : [{ ...EMPTY_CHARGE }])
 
-    const { data: full } = await supabase.from('cost_sheets').select('customer_id, attend_to, sale_remark, allocation_method').eq('id', sheet.id).single()
+    const { data: full } = await supabase.from('cost_sheets').select('customer_id, attend_to, sale_remark, allocation_method, exchange_rate, currency_label').eq('id', sheet.id).single()
     setCustomerId(full?.customer_id ?? '')
     setAttendTo(full?.attend_to ?? '')
     setSaleRemark(full?.sale_remark ?? '')
     setAllocationMethod(full?.allocation_method ?? 'proportional_qty')
+    setExchangeRate(String(full?.exchange_rate ?? 1))
+    setCurrencyLabel(full?.currency_label ?? 'USD')
 
     const { data: existingItems } = await supabase
       .from('cost_sheet_items')
-      .select('product_id, product_name_text, qty, unit, sales_price, remark')
+      .select('product_id, product_name_text, qty, unit, sales_price, remark, cost_of_good, cost_of_good_is_foreign')
       .eq('cost_sheet_id', sheet.id)
     setItems(existingItems && existingItems.length ? existingItems.map((i) => ({
       product_id: i.product_id || '', product_name_text: i.product_name_text || '',
       qty: i.qty, unit: i.unit || '', sales_price: i.sales_price,
+      cost_of_good: i.cost_of_good ?? '', cost_of_good_is_foreign: i.cost_of_good_is_foreign ?? false,
       remark: i.remark || ''
     })) : [{ ...EMPTY_ITEM }])
 
@@ -105,14 +136,15 @@ export default function CostSheetsPage() {
     }
 
     const { data: { user } } = await supabase.auth.getUser()
-    const validCharges = charges.filter((c) => c.label && c.amount !== '').map((c) => ({ label: c.label, amount: Number(c.amount) }))
+    const validCharges = charges.filter((c) => c.label && c.amount !== '').map((c) => ({ label: c.label, amount: Number(c.amount), is_foreign: !!c.is_foreign }))
 
     const { data: sheet, error: sheetError } = await supabase
       .from('cost_sheets')
       .insert({
         doc_no: docNo, revision_no: revisionNo, is_current: true, charges: validCharges, created_by: user?.id,
         customer_id: customerId || null, attend_to: attendTo || null, sale_remark: saleRemark || null,
-        allocation_method: allocationMethod
+        allocation_method: allocationMethod,
+        exchange_rate: Number(exchangeRate) || 1, currency_label: currencyLabel || null
       })
       .select('id').single()
 
@@ -127,6 +159,8 @@ export default function CostSheetsPage() {
         qty: Number(it.qty),
         unit: it.unit || null,
         sales_price: Number(it.sales_price) || 0,
+        cost_of_good: Number(it.cost_of_good) || 0,
+        cost_of_good_is_foreign: !!it.cost_of_good_is_foreign,
         remark: it.remark || null
       }))
 
@@ -172,6 +206,13 @@ export default function CostSheetsPage() {
               </select>
             </div>
 
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+              <label style={{ fontSize: 13, color: 'var(--ink-soft)' }}>อัตราแลกเปลี่ยน (1 หน่วยเงินต่างประเทศ = กี่บาท)</label>
+              <input placeholder="เช่น 32" type="number" value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)} style={{ maxWidth: 120 }} />
+              <input placeholder="สกุลเงิน เช่น USD" value={currencyLabel} onChange={(e) => setCurrencyLabel(e.target.value)} style={{ maxWidth: 120 }} />
+              <span style={{ fontSize: 12, color: 'var(--ink-soft)' }}>ใช้เรทนี้กับทุกช่องที่ติ๊ก "เป็นเงินต่างประเทศ"</span>
+            </div>
+
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <select value={customerId} onChange={(e) => handleCustomerChange(e.target.value)} style={{ flex: 1 }}>
                 <option value="">— ลูกค้า (ถ้าจะออกใบเสนอราคา) —</option>
@@ -183,9 +224,13 @@ export default function CostSheetsPage() {
             <strong style={{ fontSize: 14 }}>ค่าใช้จ่ายรวมทั้งใบ</strong>
             <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 8px' }}>เพิ่ม/ลดรายการได้อิสระ (เช่น Purchasing Price, THC Charge, Import Duty ฯลฯ)</p>
             {charges.map((c, idx) => (
-              <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+              <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
                 <input placeholder="ชื่อค่าใช้จ่าย" value={c.label} onChange={(e) => updateCharge(idx, 'label', e.target.value)} style={{ flex: 2 }} />
                 <input placeholder="จำนวนเงิน" type="number" value={c.amount} onChange={(e) => updateCharge(idx, 'amount', e.target.value)} style={{ flex: 1 }} />
+                <label style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                  <input type="checkbox" checked={c.is_foreign} onChange={(e) => updateCharge(idx, 'is_foreign', e.target.checked)} style={{ marginRight: 4 }} />
+                  เงินตปท.
+                </label>
                 <button type="button" onClick={() => setCharges((prev) => prev.filter((_, i) => i !== idx))}>ลบ</button>
               </div>
             ))}
@@ -222,8 +267,28 @@ export default function CostSheetsPage() {
                     <option value="เส้น">เส้น</option>
                     <option value="อัน">อัน</option>
                   </select>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
+                  <input placeholder="Cost of Good (ต้นทุนสินค้า/หน่วย)" type="number" value={it.cost_of_good} onChange={(e) => updateItem(idx, 'cost_of_good', e.target.value)} style={{ flex: 1 }} />
+                  <label style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                    <input type="checkbox" checked={it.cost_of_good_is_foreign} onChange={(e) => updateItem(idx, 'cost_of_good_is_foreign', e.target.checked)} style={{ marginRight: 4 }} />
+                    เงินตปท.
+                  </label>
                   <input placeholder="ราคาขาย/หน่วย" type="number" value={it.sales_price} onChange={(e) => updateItem(idx, 'sales_price', e.target.value)} style={{ flex: 1 }} />
                 </div>
+
+                {(() => {
+                  const calc = liveCalc(it)
+                  return (
+                    <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '6px 0 0' }}>
+                      ต้นทุน/หน่วย (ประเมิน): <b className="mono">{calc.unitCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}</b>
+                      {' · '}GP: <b className="mono" style={{ color: calc.gp >= 0 ? 'var(--success-ink)' : 'var(--danger-ink)' }}>
+                        {calc.gp.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </b>
+                      {' ('}{calc.gpPercent.toFixed(1)}%{')'}
+                    </p>
+                  )
+                })()}
                 <input placeholder="Remark (โชว์ในใบเสนอราคา)" value={it.remark} onChange={(e) => updateItem(idx, 'remark', e.target.value)} style={{ width: '100%', marginTop: 6 }} />
               </div>
             ))}
