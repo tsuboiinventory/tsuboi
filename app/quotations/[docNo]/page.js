@@ -23,7 +23,7 @@ export default function QuotationDocPage() {
     const [sheetRes, companyRes, templateRes] = await Promise.all([
       supabase
         .from('cost_sheets')
-        .select('id, doc_no, created_at, attend_to, sale_remark, customers ( name, address, tax_id )')
+        .select('id, doc_no, created_at, attend_to, sale_remark, currency_label, customers ( name, address, tax_id )')
         .eq('doc_no', decoded)
         .eq('is_current', true)
         .single(),
@@ -38,7 +38,7 @@ export default function QuotationDocPage() {
     if (sheetRes.data) {
       const { data: itemRows } = await supabase
         .from('cost_sheet_items')
-        .select('qty, sales_price, remark, product_name_text, inventory_items ( sku, name )')
+        .select('qty, unit, sales_price, remark, product_name_text, inventory_items ( sku, name )')
         .eq('cost_sheet_id', sheetRes.data.id)
       setItems(itemRows ?? [])
     }
@@ -53,6 +53,8 @@ export default function QuotationDocPage() {
   const accent = template?.accent_color || '#111111'
   const logoPos = template?.logo_position || 'left'
   const headerJustify = logoPos === 'right' ? 'row-reverse' : logoPos === 'center' ? 'column' : 'row'
+
+  const currency = sheet.currency_label || 'THB'
 
   return (
     <div style={{ background: '#f2f2f2', minHeight: '100vh', padding: 20 }}>
@@ -102,9 +104,9 @@ export default function QuotationDocPage() {
           <thead>
             <tr style={{ background: accent, color: 'white' }}>
               <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'left' }}>Product</th>
-              <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>Price</th>
+              <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>Price ({currency})</th>
               <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>Quantity</th>
-              <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>Amount</th>
+              <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>Amount ({currency})</th>
               {template?.show_remark_column && <th style={{ border: '1px solid #ddd', padding: 8, textAlign: 'left' }}>Remark</th>}
             </tr>
           </thead>
@@ -113,7 +115,7 @@ export default function QuotationDocPage() {
               <tr key={idx}>
                 <td style={{ border: '1px solid #ddd', padding: 8 }}>{it.inventory_items?.name ?? it.product_name_text}</td>
                 <td style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>{Number(it.sales_price).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                <td style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>{it.qty}</td>
+                <td style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>{it.qty} {it.unit || ''}</td>
                 <td style={{ border: '1px solid #ddd', padding: 8, textAlign: 'right' }}>{(it.qty * it.sales_price).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                 {template?.show_remark_column && <td style={{ border: '1px solid #ddd', padding: 8 }}>{it.remark}</td>}
               </tr>
