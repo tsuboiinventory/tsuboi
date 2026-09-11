@@ -197,10 +197,11 @@ export default function CostSheetsPage() {
     if (expandedDocNo === sheet.doc_no) { setExpandedDocNo(null); return }
     setExpandedDocNo(sheet.doc_no)
     if (!itemCalc[sheet.doc_no]) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('v_cost_sheet_item_calc')
-        .select('*, cost_sheet_items ( inventory_items ( sku, name ) )')
+        .select('*')
         .eq('cost_sheet_id', sheet.id)
+      if (error) { console.error(error); }
       setItemCalc((prev) => ({ ...prev, [sheet.doc_no]: data ?? [] }))
     }
   }
@@ -425,10 +426,12 @@ export default function CostSheetsPage() {
                         <tbody>
                           {(itemCalc[s.doc_no] ?? []).map((calc) => {
                             const gp = calc.sales_price - calc.allocated_unit_cost
+                            const product = products.find((p) => p.id === calc.product_id)
+                            const productLabel = product ? `${product.sku} — ${product.name}` : (calc.product_name_text || '-')
                             return (
                               <tr key={calc.cost_sheet_item_id}>
-                                <td>{calc.cost_sheet_items?.inventory_items ? `${calc.cost_sheet_items.inventory_items.sku} — ${calc.cost_sheet_items.inventory_items.name}` : '-'}</td>
-                                <td className="mono" style={{ textAlign: 'right' }}>{calc.qty}</td>
+                                <td>{productLabel}</td>
+                                <td className="mono" style={{ textAlign: 'right' }}>{calc.qty} {calc.unit || ''}</td>
                                 <td className="mono" style={{ textAlign: 'right' }}>{Number(calc.allocated_unit_cost).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                                 <td className="mono" style={{ textAlign: 'right' }}>{Number(calc.sales_price).toLocaleString()}</td>
                                 <td className="mono" style={{ textAlign: 'right', color: gp >= 0 ? 'var(--success-ink)' : 'var(--danger-ink)' }}>{gp.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
