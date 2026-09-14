@@ -22,6 +22,9 @@ export default function ReportsPage() {
   const [purchaseRows, setPurchaseRows] = useState([])
   const [categories, setCategories] = useState([])
   const [categoryFilter, setCategoryFilter] = useState('')
+  const [customerProductFilter, setCustomerProductFilter] = useState('')
+  const [compareProductFilter, setCompareProductFilter] = useState('')
+  const [compareSupplierFilter, setCompareSupplierFilter] = useState('')
   const [expandedCustomer, setExpandedCustomer] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -58,9 +61,16 @@ export default function ReportsPage() {
   }, [salesRows, categoryFilter])
 
   // ---------- Tab 2: ยอดซื้อต่อลูกค้า ----------
-  const byCustomer = useMemo(() => {
+  const salesProductOptions = useMemo(() => {
     const map = new Map()
-    for (const r of salesRows) {
+    for (const r of salesRows) if (!map.has(r.item_id)) map.set(r.item_id, { id: r.item_id, sku: r.sku, name: r.product_name })
+    return [...map.values()].sort((a, b) => a.sku.localeCompare(b.sku))
+  }, [salesRows])
+
+  const byCustomer = useMemo(() => {
+    const filtered = customerProductFilter ? salesRows.filter((r) => r.item_id === customerProductFilter) : salesRows
+    const map = new Map()
+    for (const r of filtered) {
       const key = r.customer_id ?? 'ไม่ระบุ'
       if (!map.has(key)) map.set(key, { name: r.customer_name ?? 'ไม่ระบุลูกค้า', qty: 0, value: 0, products: new Map() })
       const acc = map.get(key)
@@ -72,19 +82,36 @@ export default function ReportsPage() {
       acc.products.set(pKey, { sku: r.sku, name: r.product_name, qty: prevQty + Number(r.qty), value: prevVal + Number(r.total_sale_value ?? 0) })
     }
     return [...map.entries()].map(([id, v]) => ({ id, ...v, products: [...v.products.values()] })).sort((a, b) => b.value - a.value)
-  }, [salesRows])
+  }, [salesRows, customerProductFilter])
 
   // ---------- Tab 3: เปรียบเทียบราคาซื้อ (สินค้าเดียวกัน หลาย Supplier/หลายครั้ง) ----------
-  const purchaseCompare = useMemo(() => {
+  const purchaseProductOptions = useMemo(() => {
     const map = new Map()
-    for (const r of purchaseRows) {
-      if (r.unit_cost == null) continue
+    for (const r of purchaseRows) if (!map.has(r.item_id)) map.set(r.item_id, { id: r.item_id, sku: r.sku, name: r.product_name })
+    return [...map.values()].sort((a, b) => a.sku.localeCompare(b.sku))
+  }, [purchaseRows])
+
+  const purchaseSupplierOptions = useMemo(() => {
+    const map = new Map()
+    for (const r of purchaseRows) if (r.supplier_id && !map.has(r.supplier_id)) map.set(r.supplier_id, r.supplier_name)
+    return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
+  }, [purchaseRows])
+
+  const purchaseCompare = useMemo(() => {
+    const filtered = purchaseRows.filter((r) => {
+      if (r.unit_cost == null) return false
+      if (compareProductFilter && r.item_id !== compareProductFilter) return false
+      if (compareSupplierFilter && r.supplier_id !== compareSupplierFilter) return false
+      return true
+    })
+    const map = new Map()
+    for (const r of filtered) {
       const key = r.item_id
       if (!map.has(key)) map.set(key, { sku: r.sku, name: r.product_name, entries: [] })
       map.get(key).entries.push({ supplier: r.supplier_name ?? 'ไม่ระบุ', cost: Number(r.unit_cost), date: r.created_at })
     }
     return [...map.values()].filter((p) => p.entries.length > 0)
-  }, [purchaseRows])
+  }, [purchaseRows, compareProductFilter, compareSupplierFilter])
 
   return (
     <div className="app-shell">
@@ -127,7 +154,12 @@ export default function ReportsPage() {
         )}
 
         {tab === 'by_customer' && (
-          <table className="data-table">
+          <>
+            <select value={customerProductFilter} onChange={(e) => setCustomerProductFilter(e.target.value)} style={{ marginBottom: 12 }}>
+              <option value="">ทุกสินค้า</option>
+              {salesProductOptions.map((p) => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
+            </select>
+            <table className="data-table">
             <thead><tr><th>ลูกค้า</th><th style={{ textAlign: 'right' }}>จำนวนรวม</th><th style={{ textAlign: 'right' }}>ยอดซื้อรวม</th><th></th></tr></thead>
             <tbody>
               {byCustomer.map((c) => (
@@ -159,11 +191,22 @@ export default function ReportsPage() {
               )}
             </tbody>
           </table>
+          </>
         )}
 
         {tab === 'purchase_compare' && (
           <>
             <p style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 12 }}>ราคาต่อหน่วยแต่ละครั้งที่รับเข้า เทียบตาม Supplier — ใช้พิจารณาว่าราคาต่างกันแค่ไหน</p>
+            <div className="filter-row" style={{ marginBottom: 16 }}>
+              <select value={compareProductFilter} onChange={(e) => setCompareProductFilter(e.target.value)}>
+                <option value="">ทุกสินค้า</option>
+                {purchaseProductOptions.map((p) => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
+              </select>
+              <select value={compareSupplierFilter} onChange={(e) => setCompareSupplierFilter(e.target.value)}>
+                <option value="">ทุก Supplier</option>
+                {purchaseSupplierOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
             {purchaseCompare.map((p) => (
               <div key={p.sku} className="stat-card" style={{ marginBottom: 12 }}>
                 <strong>{p.sku} — {p.name}</strong>
