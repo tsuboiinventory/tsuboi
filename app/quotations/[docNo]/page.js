@@ -129,6 +129,21 @@ export default function QuotationDocPage() {
             <p style={{ whiteSpace: 'pre-line', fontSize: 13, marginTop: 6 }}>{sheet.sale_remark}</p>
           </div>
         )}
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 60 }}>
+          <div style={{ textAlign: 'center', width: '45%' }}>
+            <div style={{ borderTop: '1px solid #333', paddingTop: 8 }}>
+              <p style={{ margin: 0, fontSize: 13 }}>Accepted by (Customer)</p>
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: '#777' }}>Name / Date</p>
+            </div>
+          </div>
+          <div style={{ textAlign: 'center', width: '45%' }}>
+            <div style={{ borderTop: '1px solid #333', paddingTop: 8 }}>
+              <p style={{ margin: 0, fontSize: 13 }}>Authorized by</p>
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: '#777' }}>{company?.name}</p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
