@@ -3,6 +3,7 @@
 export const dynamic = 'force-dynamic'
 
 import { useEffect, useMemo, useState } from 'react'
+import * as XLSX from 'xlsx'
 import { supabase } from '../../lib/supabaseClient'
 import Sidebar from '../../components/Sidebar'
 
@@ -16,15 +17,22 @@ function fmt(n) {
   return Number(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })
 }
 
+function exportToExcel(rows, filename) {
+  if (!rows.length) { alert('ไม่มีข้อมูลให้ Export'); return }
+  const ws = XLSX.utils.json_to_sheet(rows)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Report')
+  XLSX.writeFile(wb, filename)
+}
+
 export default function ReportsPage() {
   const [tab, setTab] = useState('by_product')
   const [salesRows, setSalesRows] = useState([])
   const [purchaseRows, setPurchaseRows] = useState([])
   const [categories, setCategories] = useState([])
   const [categoryFilter, setCategoryFilter] = useState('')
-  const [customerProductFilter, setCustomerProductFilter] = useState('')
-  const [compareProductFilter, setCompareProductFilter] = useState('')
-  const [compareSupplierFilter, setCompareSupplierFilter] = useState('')
+  const [customerKeyword, setCustomerKeyword] = useState('')
+  const [compareKeyword, setCompareKeyword] = useState('')
   const [expandedCustomer, setExpandedCustomer] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -61,14 +69,11 @@ export default function ReportsPage() {
   }, [salesRows, categoryFilter])
 
   // ---------- Tab 2: ยอดซื้อต่อลูกค้า ----------
-  const salesProductOptions = useMemo(() => {
-    const map = new Map()
-    for (const r of salesRows) if (!map.has(r.item_id)) map.set(r.item_id, { id: r.item_id, sku: r.sku, name: r.product_name })
-    return [...map.values()].sort((a, b) => a.sku.localeCompare(b.sku))
-  }, [salesRows])
-
   const byCustomer = useMemo(() => {
-    const filtered = customerProductFilter ? salesRows.filter((r) => r.item_id === customerProductFilter) : salesRows
+    const q = customerKeyword.trim().toLowerCase()
+    const filtered = q
+      ? salesRows.filter((r) => r.sku?.toLowerCase().includes(q) || r.product_name?.toLowerCase().includes(q))
+      : salesRows
     const map = new Map()
     for (const r of filtered) {
       const key = r.customer_id ?? 'ไม่ระบุ'
@@ -82,27 +87,19 @@ export default function ReportsPage() {
       acc.products.set(pKey, { sku: r.sku, name: r.product_name, qty: prevQty + Number(r.qty), value: prevVal + Number(r.total_sale_value ?? 0) })
     }
     return [...map.entries()].map(([id, v]) => ({ id, ...v, products: [...v.products.values()] })).sort((a, b) => b.value - a.value)
-  }, [salesRows, customerProductFilter])
+  }, [salesRows, customerKeyword])
 
   // ---------- Tab 3: เปรียบเทียบราคาซื้อ (สินค้าเดียวกัน หลาย Supplier/หลายครั้ง) ----------
-  const purchaseProductOptions = useMemo(() => {
-    const map = new Map()
-    for (const r of purchaseRows) if (!map.has(r.item_id)) map.set(r.item_id, { id: r.item_id, sku: r.sku, name: r.product_name })
-    return [...map.values()].sort((a, b) => a.sku.localeCompare(b.sku))
-  }, [purchaseRows])
-
-  const purchaseSupplierOptions = useMemo(() => {
-    const map = new Map()
-    for (const r of purchaseRows) if (r.supplier_id && !map.has(r.supplier_id)) map.set(r.supplier_id, r.supplier_name)
-    return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
-  }, [purchaseRows])
-
   const purchaseCompare = useMemo(() => {
+    const q = compareKeyword.trim().toLowerCase()
     const filtered = purchaseRows.filter((r) => {
       if (r.unit_cost == null) return false
-      if (compareProductFilter && r.item_id !== compareProductFilter) return false
-      if (compareSupplierFilter && r.supplier_id !== compareSupplierFilter) return false
-      return true
+      if (!q) return true
+      return (
+        r.sku?.toLowerCase().includes(q) ||
+        r.product_name?.toLowerCase().includes(q) ||
+        r.supplier_name?.toLowerCase().includes(q)
+      )
     })
     const map = new Map()
     for (const r of filtered) {
@@ -111,7 +108,7 @@ export default function ReportsPage() {
       map.get(key).entries.push({ supplier: r.supplier_name ?? 'ไม่ระบุ', cost: Number(r.unit_cost), date: r.created_at })
     }
     return [...map.values()].filter((p) => p.entries.length > 0)
-  }, [purchaseRows, compareProductFilter, compareSupplierFilter])
+  }, [purchaseRows, compareKeyword])
 
   return (
     <div className="app-shell">
@@ -128,10 +125,16 @@ export default function ReportsPage() {
 
         {tab === 'by_product' && (
           <>
-            <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} style={{ marginBottom: 12 }}>
-              <option value="">ทุกประเภท (เทียบทั้งหมด)</option>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <div className="filter-row" style={{ marginBottom: 12 }}>
+              <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+                <option value="">ทุกประเภท (เทียบทั้งหมด)</option>
+                {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <button onClick={() => exportToExcel(
+                byProduct.map((p) => ({ SKU: p.sku, ชื่อสินค้า: p.name, จำนวนขาย: p.qty, 'ราคาเฉลี่ย/หน่วย': p.avgPrice, ยอดขายรวม: p.saleValue, 'GP%': p.gpPercent })),
+                'ยอดขายต่อสินค้า.xlsx'
+              )}>Export Excel</button>
+            </div>
             <table className="data-table">
               <thead><tr><th>SKU</th><th>ชื่อสินค้า</th><th style={{ textAlign: 'right' }}>จำนวนขาย</th><th style={{ textAlign: 'right' }}>ราคาเฉลี่ย/หน่วย</th><th style={{ textAlign: 'right' }}>ยอดขายรวม</th><th style={{ textAlign: 'right' }}>GP%</th></tr></thead>
               <tbody>
@@ -155,10 +158,18 @@ export default function ReportsPage() {
 
         {tab === 'by_customer' && (
           <>
-            <select value={customerProductFilter} onChange={(e) => setCustomerProductFilter(e.target.value)} style={{ marginBottom: 12 }}>
-              <option value="">ทุกสินค้า</option>
-              {salesProductOptions.map((p) => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
-            </select>
+            <div className="filter-row" style={{ marginBottom: 12 }}>
+              <input
+                placeholder="ค้นหาด้วย SKU หรือชื่อสินค้า"
+                value={customerKeyword}
+                onChange={(e) => setCustomerKeyword(e.target.value)}
+                style={{ maxWidth: 320 }}
+              />
+              <button onClick={() => exportToExcel(
+                byCustomer.map((c) => ({ ลูกค้า: c.name, จำนวนรวม: c.qty, ยอดซื้อรวม: c.value })),
+                'ยอดซื้อต่อลูกค้า.xlsx'
+              )}>Export Excel</button>
+            </div>
             <table className="data-table">
             <thead><tr><th>ลูกค้า</th><th style={{ textAlign: 'right' }}>จำนวนรวม</th><th style={{ textAlign: 'right' }}>ยอดซื้อรวม</th><th></th></tr></thead>
             <tbody>
@@ -198,14 +209,18 @@ export default function ReportsPage() {
           <>
             <p style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 12 }}>ราคาต่อหน่วยแต่ละครั้งที่รับเข้า เทียบตาม Supplier — ใช้พิจารณาว่าราคาต่างกันแค่ไหน</p>
             <div className="filter-row" style={{ marginBottom: 16 }}>
-              <select value={compareProductFilter} onChange={(e) => setCompareProductFilter(e.target.value)}>
-                <option value="">ทุกสินค้า</option>
-                {purchaseProductOptions.map((p) => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
-              </select>
-              <select value={compareSupplierFilter} onChange={(e) => setCompareSupplierFilter(e.target.value)}>
-                <option value="">ทุก Supplier</option>
-                {purchaseSupplierOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+              <input
+                placeholder="ค้นหาด้วย SKU, ชื่อสินค้า หรือชื่อ Supplier"
+                value={compareKeyword}
+                onChange={(e) => setCompareKeyword(e.target.value)}
+                style={{ maxWidth: 360 }}
+              />
+              <button onClick={() => exportToExcel(
+                purchaseCompare.flatMap((p) => p.entries.map((e) => ({
+                  SKU: p.sku, สินค้า: p.name, วันที่: new Date(e.date).toLocaleDateString('th-TH'), Supplier: e.supplier, 'ราคา/หน่วย': e.cost
+                }))),
+                'เปรียบเทียบราคาซื้อ.xlsx'
+              )}>Export Excel</button>
             </div>
             {purchaseCompare.map((p) => (
               <div key={p.sku} className="stat-card" style={{ marginBottom: 12 }}>
