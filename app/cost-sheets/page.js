@@ -13,6 +13,7 @@ export default function CostSheetsPage() {
   const [sheets, setSheets] = useState([])
   const [products, setProducts] = useState([])
   const [customers, setCustomers] = useState([])
+  const [shippingCompanies, setShippingCompanies] = useState([])
   const [expandedDocNo, setExpandedDocNo] = useState(null)
   const [itemCalc, setItemCalc] = useState({})
 
@@ -20,6 +21,8 @@ export default function CostSheetsPage() {
   const [docNo, setDocNo] = useState('')
   const [isRevision, setIsRevision] = useState(false)
   const [charges, setCharges] = useState([{ ...EMPTY_CHARGE }])
+  const [shippingCompanyId, setShippingCompanyId] = useState('')
+  const [shippingCharges, setShippingCharges] = useState([])
   const [items, setItems] = useState([{ ...EMPTY_ITEM }])
   const [openProductSearchIdx, setOpenProductSearchIdx] = useState(null)
   const [customerId, setCustomerId] = useState('')
@@ -35,14 +38,16 @@ export default function CostSheetsPage() {
   useEffect(() => { loadData() }, [])
 
   async function loadData() {
-    const [sheetRes, prodRes, custRes] = await Promise.all([
-      supabase.from('cost_sheets').select('id, doc_no, revision_no, charges, created_at, customer_id, customers ( name )').eq('is_current', true).order('created_at', { ascending: false }),
+    const [sheetRes, prodRes, custRes, shipRes] = await Promise.all([
+      supabase.from('cost_sheets').select('id, doc_no, revision_no, charges, shipping_charges, created_at, customer_id, customers ( name )').eq('is_current', true).order('created_at', { ascending: false }),
       supabase.from('inventory_items').select('id, sku, name').eq('item_type', 'product').order('name'),
-      supabase.from('customers').select('id, name, contact_name').order('name')
+      supabase.from('customers').select('id, name, contact_name').order('name'),
+      supabase.from('shipping_companies').select('id, name').order('name')
     ])
     setSheets(sheetRes.data ?? [])
     setProducts(prodRes.data ?? [])
     setCustomers(custRes.data ?? [])
+    setShippingCompanies(shipRes.data ?? [])
   }
 
   function sheetTotals() {
@@ -67,7 +72,7 @@ export default function CostSheetsPage() {
     const rate = Number(exchangeRate) || 1
     const qty = Number(item.qty) || 0
     const totalQty = items.reduce((sum, it) => sum + (Number(it.qty) || 0), 0)
-    const totalOverhead = totalCharges(charges)
+    const totalOverhead = totalCharges(charges) + totalShippingCharges()
 
     const cogThb = (Number(item.cost_of_good) || 0) * rate
 
@@ -91,8 +96,24 @@ export default function CostSheetsPage() {
     setCharges([{ ...EMPTY_CHARGE }]); setItems([{ ...EMPTY_ITEM }])
     setCustomerId(''); setAttendTo(''); setSaleRemark(''); setPurchaseRemark(''); setAllocationMethod('proportional_qty')
     setExchangeRate('1'); setCurrencyLabel('')
+    setShippingCompanyId(''); setShippingCharges([])
     setMessage(null)
     setShowForm(true)
+  }
+
+  async function handleShippingCompanyChange(id) {
+    setShippingCompanyId(id)
+    if (!id) { setShippingCharges([]); return }
+    const { data } = await supabase.from('shipping_company_services').select('service_label, default_amount').eq('shipping_company_id', id)
+    setShippingCharges((data ?? []).map((s) => ({ label: s.service_label, amount: String(s.default_amount) })))
+  }
+
+  function updateShippingCharge(idx, field, value) {
+    setShippingCharges((prev) => prev.map((c, i) => (i === idx ? { ...c, [field]: value } : c)))
+  }
+
+  function totalShippingCharges() {
+    return shippingCharges.reduce((sum, c) => sum + (Number(c.amount) || 0), 0)
   }
 
   function handleCustomerChange(id) {
@@ -105,7 +126,7 @@ export default function CostSheetsPage() {
     setDocNo(sheet.doc_no); setIsRevision(true)
     setCharges(sheet.charges.length ? sheet.charges.map((c) => ({ label: c.label, amount: c.amount })) : [{ ...EMPTY_CHARGE }])
 
-    const { data: full } = await supabase.from('cost_sheets').select('customer_id, attend_to, sale_remark, purchase_remark, allocation_method, exchange_rate, currency_label').eq('id', sheet.id).single()
+    const { data: full } = await supabase.from('cost_sheets').select('customer_id, attend_to, sale_remark, purchase_remark, allocation_method, exchange_rate, currency_label, shipping_company_id, shipping_charges').eq('id', sheet.id).single()
     setCustomerId(full?.customer_id ?? '')
     setAttendTo(full?.attend_to ?? '')
     setSaleRemark(full?.sale_remark ?? '')
@@ -113,6 +134,8 @@ export default function CostSheetsPage() {
     setAllocationMethod(full?.allocation_method ?? 'proportional_qty')
     setExchangeRate(String(full?.exchange_rate ?? 1))
     setCurrencyLabel(full?.currency_label ?? '')
+    setShippingCompanyId(full?.shipping_company_id ?? '')
+    setShippingCharges(full?.shipping_charges?.length ? full.shipping_charges.map((c) => ({ label: c.label, amount: String(c.amount) })) : [])
 
     const { data: existingItems } = await supabase
       .from('cost_sheet_items')
@@ -156,6 +179,7 @@ export default function CostSheetsPage() {
 
     const { data: { user } } = await supabase.auth.getUser()
     const validCharges = charges.filter((c) => c.label && c.amount !== '').map((c) => ({ label: c.label, amount: Number(c.amount) }))
+    const validShippingCharges = shippingCharges.filter((c) => c.label && c.amount !== '').map((c) => ({ label: c.label, amount: Number(c.amount) }))
 
     const { data: sheet, error: sheetError } = await supabase
       .from('cost_sheets')
@@ -164,7 +188,8 @@ export default function CostSheetsPage() {
         customer_id: customerId || null, attend_to: attendTo || null, sale_remark: saleRemark || null,
         purchase_remark: purchaseRemark || null,
         allocation_method: allocationMethod,
-        exchange_rate: Number(exchangeRate) || 1, currency_label: currencyLabel || null
+        exchange_rate: Number(exchangeRate) || 1, currency_label: currencyLabel || null,
+        shipping_company_id: shippingCompanyId || null, shipping_charges: validShippingCharges
       })
       .select('id').single()
 
@@ -229,7 +254,16 @@ export default function CostSheetsPage() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
               <label style={{ fontSize: 13, color: 'var(--ink-soft)' }}>เรทแลกเปลี่ยน (คูณกับ Cost of Good เท่านั้น — ถ้าเป็นบาทอยู่แล้วใส่ 1)</label>
               <input placeholder="เช่น 32 หรือ 1" type="number" value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)} style={{ maxWidth: 120 }} />
-              <input placeholder="สกุลเงิน" value={currencyLabel} onChange={(e) => setCurrencyLabel(e.target.value)} style={{ maxWidth: 120 }} />
+              <select value={currencyLabel} onChange={(e) => setCurrencyLabel(e.target.value)} style={{ maxWidth: 140 }}>
+                <option value="">— สกุลเงิน —</option>
+                <option value="THB">THB — บาท</option>
+                <option value="USD">USD — ดอลลาร์สหรัฐ</option>
+                <option value="EUR">EUR — ยูโร</option>
+                <option value="JPY">JPY — เยน</option>
+                <option value="CNY">CNY — หยวน</option>
+                <option value="GBP">GBP — ปอนด์</option>
+                <option value="SGD">SGD — ดอลลาร์สิงคโปร์</option>
+              </select>
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
@@ -250,7 +284,27 @@ export default function CostSheetsPage() {
               </div>
             ))}
             <button type="button" onClick={() => setCharges((prev) => [...prev, { ...EMPTY_CHARGE }])} style={{ marginBottom: 4 }}>+ เพิ่มค่าใช้จ่าย</button>
-            <p style={{ fontSize: 13, marginTop: 6 }}>รวมทั้งใบ: <b className="mono">{totalCharges(charges).toLocaleString()}</b></p>
+            <p style={{ fontSize: 13, marginTop: 6 }}>รวมค่าใช้จ่ายอิสระ: <b className="mono">{totalCharges(charges).toLocaleString()}</b></p>
+
+            <hr style={{ margin: '16px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
+
+            <strong style={{ fontSize: 14 }}>Shipping Cost</strong>
+            <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 8px' }}>เลือกบริษัทขนส่ง — ระบบจะดึง Rate Card มาใส่ให้ แก้ไขต่อในใบนี้ได้อิสระ</p>
+            <select value={shippingCompanyId} onChange={(e) => handleShippingCompanyChange(e.target.value)} style={{ marginBottom: 10 }}>
+              <option value="">— ไม่มีค่าขนส่ง —</option>
+              {shippingCompanies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+
+            {shippingCharges.map((c, idx) => (
+              <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                <input placeholder="ชื่อค่าบริการ" value={c.label} onChange={(e) => updateShippingCharge(idx, 'label', e.target.value)} style={{ flex: 2 }} />
+                <input placeholder="จำนวนเงิน" type="number" value={c.amount} onChange={(e) => updateShippingCharge(idx, 'amount', e.target.value)} style={{ flex: 1 }} />
+                <button type="button" onClick={() => setShippingCharges((prev) => prev.filter((_, i) => i !== idx))}>ลบ</button>
+              </div>
+            ))}
+            <button type="button" onClick={() => setShippingCharges((prev) => [...prev, { ...EMPTY_CHARGE }])} style={{ marginBottom: 4 }}>+ เพิ่มค่าขนส่ง</button>
+            <p style={{ fontSize: 13, marginTop: 6 }}>รวมค่าขนส่ง: <b className="mono">{totalShippingCharges().toLocaleString()}</b></p>
+            <p style={{ fontSize: 13, marginTop: 6, fontWeight: 600 }}>รวมค่าใช้จ่ายทั้งหมด: <b className="mono">{(totalCharges(charges) + totalShippingCharges()).toLocaleString()}</b></p>
 
             <hr style={{ margin: '16px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
 
