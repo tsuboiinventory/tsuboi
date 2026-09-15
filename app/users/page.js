@@ -39,25 +39,31 @@ export default function UsersPage() {
     setCreating(true)
     setCreateMsg(null)
 
-    const { data: { session } } = await supabase.auth.getSession()
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
 
-    const res = await fetch('/api/create-user', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-      body: JSON.stringify({ email: newEmail, password: newPassword, name: newName, role_id: newRoleId || null })
-    })
-    const data = await res.json()
+      const res = await fetch('/api/create-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ email: newEmail, password: newPassword, name: newName, role_id: newRoleId || null })
+      })
 
-    setCreating(false)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(`เรียก API ไม่สำเร็จ (สถานะ ${res.status}): ${text.startsWith('<') ? 'ไม่พบ API Route (/api/create-user) — เช็คว่าวางไฟล์ถูก path หรือยัง' : text}`)
+      }
 
-    if (!res.ok || data?.error) {
-      setCreateMsg({ ok: false, text: 'สร้างไม่สำเร็จ: ' + data?.error })
-      return
+      const data = await res.json()
+      if (data?.error) throw new Error(data.error)
+
+      setCreateMsg({ ok: true, text: 'สร้างบัญชีสำเร็จ' })
+      setNewEmail(''); setNewPassword(''); setNewName(''); setNewRoleId('')
+      loadData()
+    } catch (err) {
+      setCreateMsg({ ok: false, text: 'สร้างไม่สำเร็จ: ' + err.message })
+    } finally {
+      setCreating(false)
     }
-
-    setCreateMsg({ ok: true, text: 'สร้างบัญชีสำเร็จ' })
-    setNewEmail(''); setNewPassword(''); setNewName(''); setNewRoleId('')
-    loadData()
   }
 
   async function handleRoleChange(userId, roleId) {
