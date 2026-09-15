@@ -13,6 +13,14 @@ export default function UsersPage() {
   const [userDeptAccess, setUserDeptAccess] = useState({}) // user_id -> [department_id]
   const [expandedId, setExpandedId] = useState(null)
 
+  const [showCreate, setShowCreate] = useState(false)
+  const [newEmail, setNewEmail] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newName, setNewName] = useState('')
+  const [newRoleId, setNewRoleId] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [createMsg, setCreateMsg] = useState(null)
+
   useEffect(() => { loadData() }, [])
 
   async function loadData() {
@@ -24,6 +32,32 @@ export default function UsersPage() {
     setUsers(userRes.data ?? [])
     setRoles(roleRes.data ?? [])
     setDepartments(deptRes.data ?? [])
+  }
+
+  async function handleCreateUser(e) {
+    e.preventDefault()
+    setCreating(true)
+    setCreateMsg(null)
+
+    const { data: { session } } = await supabase.auth.getSession()
+
+    const res = await fetch('/api/create-user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+      body: JSON.stringify({ email: newEmail, password: newPassword, name: newName, role_id: newRoleId || null })
+    })
+    const data = await res.json()
+
+    setCreating(false)
+
+    if (!res.ok || data?.error) {
+      setCreateMsg({ ok: false, text: 'สร้างไม่สำเร็จ: ' + data?.error })
+      return
+    }
+
+    setCreateMsg({ ok: true, text: 'สร้างบัญชีสำเร็จ' })
+    setNewEmail(''); setNewPassword(''); setNewName(''); setNewRoleId('')
+    loadData()
   }
 
   async function handleRoleChange(userId, roleId) {
@@ -56,8 +90,26 @@ export default function UsersPage() {
       <main className="main">
         <h2 style={{ margin: '0 0 4px' }}>จัดการผู้ใช้งาน</h2>
         <p style={{ color: 'var(--ink-soft)', fontSize: 13, margin: 0 }}>
-          กำหนด Role และแผนกที่แต่ละคนเข้าถึงได้ — บัญชีต้องถูกสร้างผ่าน Supabase Auth ก่อน (Dashboard → Authentication) หน้านี้แค่ผูกสิทธิ์เท่านั้น
+          กำหนด Role และแผนกที่แต่ละคนเข้าถึงได้
         </p>
+
+        <button className="primary" onClick={() => setShowCreate((v) => !v)} style={{ marginTop: 12 }}>
+          {showCreate ? 'ปิดฟอร์ม' : '+ เพิ่มผู้ใช้ใหม่'}
+        </button>
+
+        {showCreate && (
+          <form onSubmit={handleCreateUser} className="stat-card" style={{ marginTop: 12, maxWidth: 420 }}>
+            <input placeholder="อีเมล" type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} required style={{ width: '100%', marginBottom: 8 }} />
+            <input placeholder="รหัสผ่านเริ่มต้น (อย่างน้อย 6 ตัว)" type="text" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required minLength={6} style={{ width: '100%', marginBottom: 8 }} />
+            <input placeholder="ชื่อ" value={newName} onChange={(e) => setNewName(e.target.value)} style={{ width: '100%', marginBottom: 8 }} />
+            <select value={newRoleId} onChange={(e) => setNewRoleId(e.target.value)} style={{ width: '100%', marginBottom: 10 }}>
+              <option value="">— เลือก Role —</option>
+              {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+            <button className="primary" type="submit" disabled={creating}>{creating ? 'กำลังสร้าง...' : 'สร้างบัญชี'}</button>
+            {createMsg && <p className={`badge ${createMsg.ok ? 'success' : 'danger'}`} style={{ display: 'block', marginTop: 10, width: 'fit-content' }}>{createMsg.text}</p>}
+          </form>
+        )}
 
         <table className="data-table" style={{ marginTop: 20 }}>
           <thead><tr><th>อีเมล</th><th>ชื่อ</th><th>Role</th><th></th></tr></thead>
